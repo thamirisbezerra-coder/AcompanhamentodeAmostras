@@ -44,6 +44,7 @@
       const [segmentFilter, setSegmentFilter] = useState('Todos');
       const [vendedorFilter, setVendedorFilter] = useState('Todos');
       const [aromaFilter, setAromaFilter] = useState(false);
+      const [performanceFilter, setPerformanceFilter] = useState('Todos'); // NOVO: Filtro clicável no gráfico
 
       // 1. FUNÇÕES AUXILIARES
       const parseSheetDate = (dateStr) => {
@@ -55,6 +56,27 @@
         const d = new Date(dateStr);
         if (!isNaN(d.getTime())) d.setHours(0,0,0,0);
         return isNaN(d.getTime()) ? null : d;
+      };
+
+      // NOVO: Cálculo de Dias Úteis para o Lead Time
+      const calculateBusinessDays = (start, end) => {
+        if (!start || !end || isNaN(start.getTime()) || isNaN(end.getTime())) return null;
+        let count = 0;
+        let cur = new Date(start);
+        cur.setHours(0,0,0,0);
+        let target = new Date(end);
+        target.setHours(0,0,0,0);
+
+        if (cur > target) return 0; // Se emitido depois da entrega, considera 0
+
+        while (cur < target) {
+          cur.setDate(cur.getDate() + 1);
+          const day = cur.getDay();
+          if (day !== 0 && day !== 6) { // 0 = Domingo, 6 = Sábado
+            count++;
+          }
+        }
+        return count;
       };
 
       const calculateDaysDiff = (prev, env) => {
@@ -107,6 +129,7 @@
 
             const parsedData = lines.slice(1).map((line, index) => {
               const cols = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(cleanString);
+              const dataEmissaoObj = parseSheetDate(cols[idx.emissao]);
               const dataEntregaObj = parseSheetDate(cols[idx.entrega]);
               const dataEmissaoNFObj = parseSheetDate(cols[idx.emissaoNF]);
               
@@ -115,6 +138,7 @@
                 pedido: cols[idx.pedido] || '-',
                 tipo: cols[idx.tipo] ? cols[idx.tipo].toUpperCase() : '-',
                 emissaoStr: cols[idx.emissao] || '-',
+                emissaoObj: dataEmissaoObj,
                 entregaObj: dataEntregaObj,
                 codCliente: cols[idx.codCliente] || '-',
                 razaoSocial: cols[idx.razaoSocial] || '-',
@@ -125,7 +149,8 @@
                 vendedor: cols[idx.vendedor] || '-',
                 nf: cols[idx.nf] || '-',
                 emissaoNFObj: dataEmissaoNFObj,
-                diasAntecipacao: calculateDaysDiff(dataEntregaObj, dataEmissaoNFObj)
+                diasAntecipacao: calculateDaysDiff(dataEntregaObj, dataEmissaoNFObj),
+                leadTime: calculateBusinessDays(dataEmissaoObj, dataEntregaObj)
               };
             }).filter(item => item.pedido !== '-');
 
@@ -153,6 +178,10 @@
           const baseDate = new Date();
           baseDate.setDate(baseDate.getDate() - Math.floor(Math.random() * 30)); 
           const entregaObj = new Date(baseDate);
+          
+          // Gera uma data de emissão de 2 a 12 dias antes da entrega
+          const emissaoObj = new Date(entregaObj.getTime() - (Math.floor(Math.random() * 10 + 2) * 86400000)); 
+
           const daysOffset = isLate ? -Math.floor(Math.random() * 4 + 1) : Math.floor(Math.random() * 8 + 1);
           const emissaoNFObj = new Date(entregaObj);
           emissaoNFObj.setDate(entregaObj.getDate() - daysOffset);
@@ -161,7 +190,8 @@
             id: i,
             pedido: `PED-${20000 + i}`,
             tipo: Math.random() > 0.5 ? 'AM' : 'AMF',
-            emissaoStr: formatDate(new Date(entregaObj.getTime() - 864000000)),
+            emissaoStr: formatDate(emissaoObj),
+            emissaoObj,
             entregaObj,
             codCliente: `C${100 + Math.floor(Math.random() * 50)}`,
             razaoSocial: nomes[Math.floor(Math.random() * nomes.length)],
@@ -172,7 +202,8 @@
             vendedor: 'Representante Padrão',
             nf: `NF-${50000 + i}`,
             emissaoNFObj,
-            diasAntecipacao: daysOffset
+            diasAntecipacao: daysOffset,
+            leadTime: calculateBusinessDays(emissaoObj, entregaObj)
           });
         }
         setData(mock);
@@ -190,8 +221,8 @@
         return ['Todos', ...unique.sort()];
       }, [data]);
 
-      // 4. FILTRAGEM
-      const filteredData = useMemo(() => {
+      // 4. FILTRAGEM BASE (Para alimentar os Gráficos)
+      const baseFilteredData = useMemo(() => {
         return data.filter(item => {
           const search = searchQuery.toLowerCase();
           const matchText = 
@@ -222,17 +253,13 @@
           if ((startDate || endDate) && !targetDate) matchDate = false;
 
           return matchText && matchDate && matchSegment && matchVendedor && matchAroma;
-        }).sort((a, b) => {
-          if (!a.emissaoNFObj) return 1;
-          if (!b.emissaoNFObj) return -1;
-          return b.emissaoNFObj - a.emissaoNFObj;
         });
       }, [data, searchQuery, startDate, endDate, dateFilterType, segmentFilter, vendedorFilter, aromaFilter]);
 
-      // 5. MÉTRICAS E DADOS PARA GRÁFICOS
+      // 5. MÉTRICAS E DADOS PARA GRÁFICOS (Mantém o gráfico fixo, usando a Base)
       const metrics = useMemo(() => {
-        const validData = filteredData.filter(d => d.diasAntecipacao !== null);
-        if (validData.length === 0) return { media: 0, noPrazoPct: 0, total: filteredData.length, envios: 0, distribuicao: { adiantadoFolga: 0, adiantadoAperto: 0, atrasado: 0 } };
+        const validData = baseFilteredData.filter(d => d.diasAntecipacao !== null);
+        if (validData.length === 0) return { media: 0, noPrazoPct: 0, total: baseFilteredData.length, envios: 0, distribuicao: { adiantadoFolga: 0, adiantadoAperto: 0, atrasado: 0 } };
         
         let soma = 0;
         let qtdNoPrazo = 0;
@@ -253,13 +280,30 @@
         });
 
         return {
-          total: filteredData.length,
+          total: baseFilteredData.length,
           envios: validData.length,
           media: Math.round((soma / validData.length) * 10) / 10,
           noPrazoPct: Math.round((qtdNoPrazo / validData.length) * 100),
           distribuicao
         };
-      }, [filteredData]);
+      }, [baseFilteredData]);
+
+      // 6. FILTRAGEM FINAL (Aplica o clique do gráfico para cortar a Tabela)
+      const finalFilteredData = useMemo(() => {
+        return baseFilteredData.filter(item => {
+          if (performanceFilter === 'Todos') return true;
+          if (item.diasAntecipacao === null) return false;
+          
+          if (performanceFilter === 'adiantadoFolga') return item.diasAntecipacao > 2;
+          if (performanceFilter === 'adiantadoAperto') return item.diasAntecipacao >= 0 && item.diasAntecipacao <= 2;
+          if (performanceFilter === 'atrasado') return item.diasAntecipacao < 0;
+          return true;
+        }).sort((a, b) => {
+          if (!a.emissaoNFObj) return 1;
+          if (!b.emissaoNFObj) return -1;
+          return b.emissaoNFObj - a.emissaoNFObj;
+        });
+      }, [baseFilteredData, performanceFilter]);
 
       if (loading) {
         return (
@@ -448,49 +492,72 @@
               {/* Coluna Direita: Gráficos de Distribuição */}
               <div className="lg:col-span-8 bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
                 <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                    <i className="fa-solid fa-chart-simple text-indigo-500"></i> Panorama de Performance (Envios Concluídos)
-                  </h3>
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                    <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                      <i className="fa-solid fa-chart-simple text-indigo-500"></i> Panorama de Performance
+                    </h3>
+                    {performanceFilter !== 'Todos' && (
+                      <button onClick={() => setPerformanceFilter('Todos')} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg transition-colors ml-0 sm:ml-2 font-bold flex items-center gap-1 w-max">
+                        <i className="fa-solid fa-xmark"></i> Limpar Filtro
+                      </button>
+                    )}
+                  </div>
                   <span className="bg-slate-100 text-slate-600 text-xs font-bold px-3 py-1 rounded-lg uppercase tracking-wide">
                     Total: {metrics.envios} Pedidos
                   </span>
                 </div>
                 
-                {/* Gráfico de Barras Customizado */}
-                <div className="space-y-6">
+                {/* Gráfico de Barras Customizado - AGORA INTERATIVO */}
+                <div className="space-y-3">
                   {/* Barra: Adiantados com Folga (> 2 dias) */}
-                  <div>
+                  <div 
+                    onClick={() => setPerformanceFilter(performanceFilter === 'adiantadoFolga' ? 'Todos' : 'adiantadoFolga')}
+                    className={`cursor-pointer transition-all p-3 rounded-2xl border ${performanceFilter === 'adiantadoFolga' ? 'bg-emerald-50 border-emerald-200 shadow-inner scale-[1.01]' : 'border-transparent hover:bg-slate-50'} ${performanceFilter !== 'Todos' && performanceFilter !== 'adiantadoFolga' ? 'opacity-40 grayscale-[50%]' : 'opacity-100'}`}
+                    title="Clique para filtrar apenas os pedidos com folga"
+                  >
                     <div className="flex justify-between text-sm font-semibold mb-2">
                       <span className="text-emerald-700 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Adiantados com folga (&gt;2 dias)</span>
                       <span className="text-slate-600">{metrics.distribuicao.adiantadoFolga} pedidos</span>
                     </div>
-                    <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden">
+                    <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden shadow-inner">
                       <div className="bg-emerald-500 h-4 rounded-full transition-all" style={{ width: `${metrics.envios ? (metrics.distribuicao.adiantadoFolga / metrics.envios) * 100 : 0}%` }}></div>
                     </div>
                   </div>
 
                   {/* Barra: Adiantados/Prazo Justo (0 a 2 dias) */}
-                  <div>
+                  <div 
+                    onClick={() => setPerformanceFilter(performanceFilter === 'adiantadoAperto' ? 'Todos' : 'adiantadoAperto')}
+                    className={`cursor-pointer transition-all p-3 rounded-2xl border ${performanceFilter === 'adiantadoAperto' ? 'bg-blue-50 border-blue-200 shadow-inner scale-[1.01]' : 'border-transparent hover:bg-slate-50'} ${performanceFilter !== 'Todos' && performanceFilter !== 'adiantadoAperto' ? 'opacity-40 grayscale-[50%]' : 'opacity-100'}`}
+                    title="Clique para filtrar apenas os pedidos no prazo justo"
+                  >
                     <div className="flex justify-between text-sm font-semibold mb-2">
                       <span className="text-blue-700 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-400"></span> Em cima do prazo (0 a 2 dias antes)</span>
                       <span className="text-slate-600">{metrics.distribuicao.adiantadoAperto} pedidos</span>
                     </div>
-                    <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden">
+                    <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden shadow-inner">
                       <div className="bg-blue-400 h-4 rounded-full transition-all" style={{ width: `${metrics.envios ? (metrics.distribuicao.adiantadoAperto / metrics.envios) * 100 : 0}%` }}></div>
                     </div>
                   </div>
 
                   {/* Barra: Atrasados */}
-                  <div>
+                  <div 
+                    onClick={() => setPerformanceFilter(performanceFilter === 'atrasado' ? 'Todos' : 'atrasado')}
+                    className={`cursor-pointer transition-all p-3 rounded-2xl border ${performanceFilter === 'atrasado' ? 'bg-red-50 border-red-200 shadow-inner scale-[1.01]' : 'border-transparent hover:bg-slate-50'} ${performanceFilter !== 'Todos' && performanceFilter !== 'atrasado' ? 'opacity-40 grayscale-[50%]' : 'opacity-100'}`}
+                    title="Clique para filtrar apenas os pedidos em atraso"
+                  >
                     <div className="flex justify-between text-sm font-semibold mb-2">
                       <span className="text-red-700 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500"></span> Entregas em Atraso</span>
                       <span className="text-slate-600">{metrics.distribuicao.atrasado} pedidos</span>
                     </div>
-                    <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden">
+                    <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden shadow-inner">
                       <div className="bg-red-500 h-4 rounded-full transition-all" style={{ width: `${metrics.envios ? (metrics.distribuicao.atrasado / metrics.envios) * 100 : 0}%` }}></div>
                     </div>
                   </div>
                 </div>
+                
+                <p className="text-[10px] text-slate-400 font-semibold text-center uppercase tracking-widest mt-4 flex items-center justify-center gap-1">
+                  <i className="fa-solid fa-hand-pointer"></i> Clique nas barras acima para filtrar a tabela
+                </p>
               </div>
             </div>
 
@@ -501,8 +568,9 @@
                   <h2 className="text-xl font-bold text-slate-900">Registros Detalhados</h2>
                   <p className="text-sm font-medium text-slate-500">Comparativo direto entre o Prazo Acordado e a Fatura Real.</p>
                 </div>
-                <span className="text-sm font-bold text-slate-600 bg-slate-100 px-4 py-2 rounded-xl">
-                  Listando {filteredData.length} registros
+                <span className="text-sm font-bold text-slate-600 bg-slate-100 px-4 py-2 rounded-xl flex items-center gap-2">
+                  {performanceFilter !== 'Todos' && <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>}
+                  Listando {finalFilteredData.length} registros
                 </span>
               </div>
               
@@ -517,7 +585,7 @@
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-slate-50/30">
-                    {filteredData.length === 0 ? (
+                    {finalFilteredData.length === 0 ? (
                       <tr>
                         <td colSpan="4" className="px-6 py-20 text-center">
                           <div className="flex flex-col items-center justify-center text-slate-400">
@@ -527,7 +595,7 @@
                         </td>
                       </tr>
                     ) : (
-                      filteredData.map(item => {
+                      finalFilteredData.map(item => {
                         const isEarly = item.diasAntecipacao !== null && item.diasAntecipacao >= 0;
                         const hasDates = item.diasAntecipacao !== null;
 
@@ -539,7 +607,15 @@
                               <div className="flex flex-col">
                                 <span className="text-base font-black text-slate-800">{item.pedido}</span>
                                 <span className="text-xs font-medium text-slate-500 mt-0.5">Emissão: {item.emissaoStr}</span>
-                                <span className="text-xs font-semibold text-slate-400 uppercase mt-1 flex items-center gap-1">
+                                
+                                {/* SELO DE LEAD TIME */}
+                                {item.leadTime !== null && (
+                                  <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded uppercase w-max mt-1.5 flex items-center gap-1.5 shadow-sm">
+                                    <i className="fa-solid fa-stopwatch"></i> Lead Time: {item.leadTime} dias úteis
+                                  </span>
+                                )}
+
+                                <span className="text-xs font-semibold text-slate-400 uppercase mt-2 flex items-center gap-1">
                                   <i className="fa-solid fa-box"></i> Qtd: {item.qtde}
                                 </span>
                               </div>
