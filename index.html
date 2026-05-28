@@ -624,7 +624,16 @@
                             {/* Coluna 1: Status e Pedido */}
                             <td className="px-6 py-5 align-middle">
                               <div className="flex flex-col">
-                                <span className="text-base font-black text-slate-800">{item.pedido}</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-base font-black text-slate-800">{item.pedido}</span>
+                                  {item.tipo !== '-' && (
+                                    <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-widest border ${
+                                      item.tipo.includes('AMF') ? 'bg-orange-100 text-orange-700 border-orange-300' : 'bg-slate-100 text-slate-500 border-slate-200'
+                                    }`}>
+                                      {item.tipo}
+                                    </span>
+                                  )}
+                                </div>
                                 <span className="text-xs font-medium text-slate-500 mt-0.5">Emissão: {item.emissaoStr}</span>
                                 
                                 {/* SELO DE LEAD TIME */}
@@ -682,7 +691,11 @@
                                     
                                     {/* ALERTA DE SETOR EM ATRASO */}
                                     {!isEarly && item.tipo !== '-' && (
-                                      <span className="mt-1.5 text-[9px] font-bold px-2 py-0.5 rounded bg-red-200/70 text-red-800 border border-red-300 uppercase text-center leading-tight shadow-sm">
+                                      <span className={`mt-1.5 text-[9px] font-bold px-2 py-0.5 rounded border uppercase text-center leading-tight shadow-sm ${
+                                        item.tipo.includes('AMF') 
+                                          ? 'bg-orange-100 text-orange-800 border-orange-400' 
+                                          : 'bg-red-100 text-red-800 border-red-300'
+                                      }`}>
                                         Responsável:<br/>
                                         {item.tipo.includes('AMF') ? 'Fábrica (AMF)' : item.tipo.includes('AM') ? 'Amostras (AM)' : item.tipo}
                                       </span>
