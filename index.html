@@ -265,7 +265,20 @@
       // 5. MÉTRICAS E DADOS PARA GRÁFICOS (Mantém o gráfico fixo, usando a Base)
       const metrics = useMemo(() => {
         const validData = baseFilteredData.filter(d => d.diasAntecipacao !== null);
-        if (validData.length === 0) return { media: 0, noPrazoPct: 0, total: baseFilteredData.length, envios: 0, distribuicao: { adiantadoFolga: 0, adiantadoAperto: 0, atrasado: 0 } };
+
+        // NOVO: Agrupa por número do pedido para não duplicar métricas (vários produtos no mesmo pedido = 1 contagem)
+        const uniqueOrdersMap = new Map();
+        validData.forEach(item => {
+          if (!uniqueOrdersMap.has(item.pedido)) {
+            uniqueOrdersMap.set(item.pedido, item);
+          }
+        });
+        const uniqueValidData = Array.from(uniqueOrdersMap.values());
+        
+        // Calcula o total geral de pedidos únicos (mesmo os que não têm data ainda)
+        const totalUniqueOrders = new Set(baseFilteredData.map(d => d.pedido)).size;
+
+        if (uniqueValidData.length === 0) return { media: 0, noPrazoPct: 0, total: totalUniqueOrders, envios: 0, distribuicao: { adiantadoFolga: 0, adiantadoAperto: 0, atrasado: 0 } };
         
         let soma = 0;
         let qtdNoPrazo = 0;
@@ -273,7 +286,7 @@
         // Categorias para o Gráfico de Barras
         const distribuicao = { adiantadoFolga: 0, adiantadoAperto: 0, atrasado: 0 };
 
-        validData.forEach(item => {
+        uniqueValidData.forEach(item => {
           const dias = item.diasAntecipacao;
           soma += dias;
           if (dias >= 0) {
@@ -286,10 +299,10 @@
         });
 
         return {
-          total: baseFilteredData.length,
-          envios: validData.length,
-          media: Math.round((soma / validData.length) * 10) / 10,
-          noPrazoPct: Math.round((qtdNoPrazo / validData.length) * 100),
+          total: totalUniqueOrders,
+          envios: uniqueValidData.length,
+          media: Math.round((soma / uniqueValidData.length) * 10) / 10,
+          noPrazoPct: Math.round((qtdNoPrazo / uniqueValidData.length) * 100),
           distribuicao
         };
       }, [baseFilteredData]);
@@ -576,7 +589,7 @@
                 </div>
                 <span className="text-sm font-bold text-slate-600 bg-slate-100 px-4 py-2 rounded-xl flex items-center gap-2">
                   {performanceFilter !== 'Todos' && <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>}
-                  Listando {finalFilteredData.length} registros
+                  Listando {new Set(finalFilteredData.map(item => item.pedido)).size} pedidos ({finalFilteredData.length} itens)
                 </span>
               </div>
               
