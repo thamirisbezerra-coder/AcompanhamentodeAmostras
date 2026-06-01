@@ -20,18 +20,13 @@
 </head>
 <body class="bg-[#f8fafc] text-slate-800 antialiased selection:bg-blue-200">
   
-  <!-- Onde o Painel será renderizado -->
   <div id="root"></div>
 
-  <!-- Script Principal do Painel -->
   <script type="text/babel">
     const { useState, useEffect, useMemo } = React;
 
-    // URLs das planilhas
     const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/17M3amZmDXUhFZK9F81p5BPK3B8OdqL_RF23Z1230r8A/export?format=csv&gid=620539506';
     const EDIT_SHEET_URL = 'https://docs.google.com/spreadsheets/d/17M3amZmDXUhFZK9F81p5BPK3B8OdqL_RF23Z1230r8A/edit?gid=620539506#gid=620539506';
-    
-    // URL da Planilha OTIF 2026 (Para as justificativas)
     const OTIF_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS5Ff8EGb8C9JT2J8d56bVP8OByLV8NaxwjDdMFHq8SMAeupelyoO7O-FS4r6phRIJQsQn0NLnTMT9a/pub?gid=78219648&single=true&output=csv';
 
     function App() {
@@ -39,7 +34,6 @@
       const [loading, setLoading] = useState(true);
       const [isUsingMock, setIsUsingMock] = useState(false);
       
-      // Estados de Filtros
       const [searchQuery, setSearchQuery] = useState('');
       const [dateFilterType, setDateFilterType] = useState('entrega'); 
       const [startDate, setStartDate] = useState('');
@@ -47,7 +41,9 @@
       const [segmentFilter, setSegmentFilter] = useState('Todos');
       const [vendedorFilter, setVendedorFilter] = useState('Todos');
       const [aromaFilter, setAromaFilter] = useState(false);
+      
       const [performanceFilter, setPerformanceFilter] = useState('Todos'); 
+      const [tipoFilter, setTipoFilter] = useState('Todos'); // NOVO: Filtro para AM / AMF
       const [showSegmentChart, setShowSegmentChart] = useState(false);
 
       // 1. FUNÇÕES AUXILIARES
@@ -160,48 +156,34 @@
       const cleanString = (str) => str ? str.replace(/["\r]/g, '').trim() : '';
       const removeAccents = (str) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
-      // 2. BUSCA DE DADOS (AGORA PUXANDO PRINCIPAL + OTIF)
+      // 2. BUSCA DE DADOS
       useEffect(() => {
         const fetchData = async () => {
           try {
-            // Requisição paralela: Tenta puxar a Principal e a OTIF ao mesmo tempo
             const [mainResponse, otifResponse] = await Promise.all([
               fetch(SHEET_CSV_URL).catch(() => null),
               fetch(OTIF_CSV_URL).catch(() => null)
             ]);
 
-            if (!mainResponse || !mainResponse.ok) {
-              throw new Error('Falha ao ler a planilha principal.');
-            }
-
+            if (!mainResponse || !mainResponse.ok) throw new Error('Falha ao ler a planilha principal.');
+            
             const text = await mainResponse.text();
-            if (text.toLowerCase().includes('<!doctype html>')) {
-              throw new Error('A planilha não está publicada.');
-            }
+            if (text.toLowerCase().includes('<!doctype html>')) throw new Error('A planilha não está publicada.');
 
-            // Mapeamento Inteligente da OTIF (Buscando Justificativas)
             const justificativasMap = new Map();
             if (otifResponse && otifResponse.ok) {
               const otifText = await otifResponse.text();
               if (!otifText.toLowerCase().includes('<!doctype html>')) {
                 const otifLines = otifText.split('\n').filter(line => line.trim() !== '');
-                // Começa da linha 1 para pular cabeçalhos
                 for (let i = 1; i < otifLines.length; i++) {
                   const cols = otifLines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(cleanString);
-                  // Coluna B é o índice 1 (Pedido) e Coluna AB é o índice 27 (Justificativa)
                   const ped = cols[1];
                   const just = cols[27]; 
-                  
-                  if (ped) {
-                    // Como o loop lê do topo ao fundo, o último registro desse pedido
-                    // irá naturalmente sobrescrever os antigos no Map! (Sempre o mais recente)
-                    justificativasMap.set(ped, just);
-                  }
+                  if (ped) justificativasMap.set(ped, just);
                 }
               }
             }
 
-            // Processamento da Planilha Principal
             const lines = text.split('\n').filter(line => line.trim() !== '');
             const rawHeaders = lines[0].split(',').map(h => removeAccents(cleanString(h)));
             
@@ -251,7 +233,6 @@
                 emissaoNFObj: dataEmissaoNFObj,
                 diasAntecipacao: calculateBusinessDaysDiff(dataEntregaObj, dataEmissaoNFObj),
                 leadTime: calculateBusinessDays(dataEmissaoObj, dataEntregaObj),
-                // Vincula a justificativa mapeada da planilha OTIF!
                 justificativa: justificativasMap.get(numPedido) || null
               };
             }).filter(item => item.pedido !== '-');
@@ -321,7 +302,7 @@
         return ['Todos', ...unique.sort()];
       }, [data]);
 
-      // 4. FILTRAGEM BASE
+      // 4. FILTRAGEM BASE (Aplica todos os filtros EXCETO os do gráfico interativo)
       const baseFilteredData = useMemo(() => {
         return data.filter(item => {
           const search = searchQuery.toLowerCase();
@@ -335,6 +316,8 @@
 
           const isAroma = item.descricao && item.descricao.toUpperCase().trim().startsWith('AROMA');
           const matchAroma = !aromaFilter || isAroma;
+          
+          const matchTipo = tipoFilter === 'Todos' || (item.tipo && item.tipo.includes(tipoFilter));
 
           let matchDate = true;
           const targetDate = dateFilterType === 'entrega' ? item.entregaObj : item.emissaoNFObj;
@@ -351,39 +334,55 @@
           }
           if ((startDate || endDate) && !targetDate) matchDate = false;
 
-          return matchText && matchDate && matchSegment && matchVendedor && matchAroma;
+          return matchText && matchDate && matchSegment && matchVendedor && matchAroma && matchTipo;
         });
-      }, [data, searchQuery, startDate, endDate, dateFilterType, segmentFilter, vendedorFilter, aromaFilter]);
+      }, [data, searchQuery, startDate, endDate, dateFilterType, segmentFilter, vendedorFilter, aromaFilter, tipoFilter]);
 
-      // 5. MÉTRICAS
-      const metrics = useMemo(() => {
+      // 5. MÉTRICAS PARA O GRÁFICO (Elas não somem se você clicar no gráfico)
+      const chartMetrics = useMemo(() => {
         const validData = baseFilteredData.filter(d => d.diasAntecipacao !== null);
+        const distribuicao = { noPrazo: 0, atrasado: 0 };
+        validData.forEach(item => {
+          if (item.diasAntecipacao >= 0) distribuicao.noPrazo++;
+          else distribuicao.atrasado++;
+        });
+        return { totalItens: validData.length, distribuicao };
+      }, [baseFilteredData]);
+
+      // 6. FILTRAGEM FINAL (Aplica o clique do Gráfico de Performance)
+      const finalFilteredData = useMemo(() => {
+        return baseFilteredData.filter(item => {
+          if (performanceFilter === 'Todos') return true;
+          if (item.diasAntecipacao === null) return false;
+          if (performanceFilter === 'noPrazo') return item.diasAntecipacao >= 0;
+          if (performanceFilter === 'atrasado') return item.diasAntecipacao < 0;
+          return true;
+        }).sort((a, b) => {
+          if (!a.emissaoNFObj) return 1;
+          if (!b.emissaoNFObj) return -1;
+          return b.emissaoNFObj - a.emissaoNFObj;
+        });
+      }, [baseFilteredData, performanceFilter]);
+
+      // 7. MÉTRICAS DE EXIBIÇÃO (Reagem a todos os cliques, inclusive os do gráfico)
+      const displayMetrics = useMemo(() => {
+        const validData = finalFilteredData.filter(d => d.diasAntecipacao !== null);
         const totalItens = validData.length;
 
-        if (totalItens === 0) return { media: 0, noPrazoPct: 0, totalItens: 0, amPct: 0, amfPct: 0, distribuicao: { noPrazo: 0, atrasado: 0 }, rankingVendedores: [], segmentChartData: [] };
+        if (totalItens === 0) return { media: 0, noPrazoPct: 0, amPct: 0, amfPct: 0, rankingVendedores: [], segmentChartData: [] };
         
-        let soma = 0;
-        let qtdNoPrazo = 0;
-        
+        let soma = 0, qtdNoPrazo = 0;
         let amTotal = 0, amNoPrazo = 0;
         let amfTotal = 0, amfNoPrazo = 0;
 
-        const distribuicao = { noPrazo: 0, atrasado: 0 };
         const vendedorMap = new Map();
         const segmentStats = {};
 
         validData.forEach(item => {
           const dias = item.diasAntecipacao;
           const isNoPrazo = dias >= 0;
-          
           soma += dias;
-          
-          if (isNoPrazo) {
-            qtdNoPrazo++;
-            distribuicao.noPrazo++;
-          } else {
-            distribuicao.atrasado++;
-          }
+          if (isNoPrazo) qtdNoPrazo++;
 
           if (item.tipo && item.tipo.includes('AMF')) {
             amfTotal++;
@@ -407,48 +406,24 @@
           if (isNoPrazo) vData.noPrazo += 1;
         });
 
-        const amPct = amTotal > 0 ? Math.round((amNoPrazo / amTotal) * 100) : 0;
-        const amfPct = amfTotal > 0 ? Math.round((amfNoPrazo / amfTotal) * 100) : 0;
-
-        const rankingVendedores = Array.from(vendedorMap.values()).map(v => ({
-          ...v,
-          media: Math.round((v.somaDias / v.totalEntregas) * 10) / 10,
-          eficiencia: Math.round((v.noPrazo / v.totalEntregas) * 100)
-        })).sort((a, b) => b.media - a.media);
-
-        const segmentChartData = Object.keys(segmentStats).map(k => ({
-          nome: k,
-          pct: Math.round((segmentStats[k].noPrazo / segmentStats[k].total) * 100),
-          total: segmentStats[k].total
-        })).sort((a, b) => b.pct - a.pct); 
-
         return {
-          totalItens,
           media: Math.round((soma / totalItens) * 10) / 10,
           noPrazoPct: Math.round((qtdNoPrazo / totalItens) * 100),
-          amPct,
-          amfPct,
-          distribuicao,
-          rankingVendedores,
-          segmentChartData
+          amPct: amTotal > 0 ? Math.round((amNoPrazo / amTotal) * 100) : 0,
+          amfPct: amfTotal > 0 ? Math.round((amfNoPrazo / amfTotal) * 100) : 0,
+          rankingVendedores: Array.from(vendedorMap.values()).map(v => ({
+            ...v,
+            media: Math.round((v.somaDias / v.totalEntregas) * 10) / 10,
+            eficiencia: Math.round((v.noPrazo / v.totalEntregas) * 100)
+          })).sort((a, b) => b.media - a.media),
+          segmentChartData: Object.keys(segmentStats).map(k => ({
+            nome: k,
+            pct: Math.round((segmentStats[k].noPrazo / segmentStats[k].total) * 100),
+            total: segmentStats[k].total
+          })).sort((a, b) => b.pct - a.pct)
         };
-      }, [baseFilteredData]);
+      }, [finalFilteredData]);
 
-      // 6. FILTRAGEM FINAL
-      const finalFilteredData = useMemo(() => {
-        return baseFilteredData.filter(item => {
-          if (performanceFilter === 'Todos') return true;
-          if (item.diasAntecipacao === null) return false;
-          
-          if (performanceFilter === 'noPrazo') return item.diasAntecipacao >= 0;
-          if (performanceFilter === 'atrasado') return item.diasAntecipacao < 0;
-          return true;
-        }).sort((a, b) => {
-          if (!a.emissaoNFObj) return 1;
-          if (!b.emissaoNFObj) return -1;
-          return b.emissaoNFObj - a.emissaoNFObj;
-        });
-      }, [baseFilteredData, performanceFilter]);
 
       if (loading) {
         return (
@@ -613,10 +588,10 @@
                 </div>
                 
                 <div className="flex items-end gap-3 h-56 w-full overflow-x-auto overflow-y-hidden pb-4 scrollbar-thin scrollbar-thumb-slate-300 px-2">
-                  {metrics.segmentChartData.map((seg) => (
+                  {displayMetrics.segmentChartData.map((seg) => (
                     <div key={seg.nome} className="flex flex-col items-center justify-end flex-1 min-w-[70px] h-full group relative">
                        <div className="absolute bottom-full mb-2 bg-slate-800 text-white text-[10px] py-1.5 px-3 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10 font-medium">
-                          {seg.total} itens despachados
+                          {seg.total} itens
                        </div>
                        
                        <div className="flex flex-col items-center mb-1.5 gap-0.5">
@@ -637,7 +612,7 @@
                        </span>
                     </div>
                   ))}
-                  {metrics.segmentChartData.length === 0 && (
+                  {displayMetrics.segmentChartData.length === 0 && (
                      <div className="w-full text-center text-slate-400 py-10 font-medium">Sem dados para exibir.</div>
                   )}
                 </div>
@@ -649,30 +624,55 @@
               <div className="lg:col-span-3 flex flex-col gap-6">
                 
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col justify-center h-full relative overflow-hidden group">
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-indigo-100 to-transparent rounded-bl-full opacity-50"></div>
-                  <p className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-6 relative z-10">Eficiência de Entrega</p>
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-indigo-100 to-transparent rounded-bl-full opacity-50 pointer-events-none"></div>
                   
-                  <div className="mb-5 relative z-10">
-                    <div className="flex justify-between items-end mb-1">
+                  <div className="flex justify-between items-center mb-5 relative z-10">
+                    <p className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                      Eficiência
+                      <i className="fa-solid fa-hand-pointer text-[10px] opacity-50" title="Clique nos setores para filtrar"></i>
+                    </p>
+                    {tipoFilter !== 'Todos' && (
+                      <button onClick={() => setTipoFilter('Todos')} className="text-[9px] bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded transition-colors font-bold flex items-center gap-1 uppercase">
+                        <i className="fa-solid fa-xmark"></i> Limpar
+                      </button>
+                    )}
+                  </div>
+                  
+                  {/* Amostras (AM) CLICÁVEL */}
+                  <div 
+                    onClick={() => setTipoFilter(tipoFilter === 'AM' ? 'Todos' : 'AM')}
+                    className={`mb-3 relative z-10 cursor-pointer p-3 rounded-xl transition-all border ${
+                      tipoFilter === 'AM' ? 'bg-indigo-50/80 border-indigo-200 shadow-sm scale-[1.02]' : 
+                      tipoFilter === 'AMF' ? 'opacity-40 grayscale-[50%] hover:opacity-100 hover:grayscale-0' : 'border-transparent hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex justify-between items-end mb-2">
                       <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
                         <span className="w-2.5 h-2.5 rounded-full bg-indigo-500"></span> Amostras (AM)
                       </span>
-                      <span className="text-xl font-black text-slate-900">{metrics.amPct}%</span>
+                      <span className="text-xl font-black text-slate-900">{displayMetrics.amPct}%</span>
                     </div>
-                    <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
-                      <div className="bg-indigo-500 h-2.5 rounded-full transition-all duration-1000 ease-out" style={{ width: `${metrics.amPct}%` }}></div>
+                    <div className="w-full bg-slate-200/50 rounded-full h-2.5 overflow-hidden">
+                      <div className="bg-indigo-500 h-2.5 rounded-full transition-all duration-1000 ease-out" style={{ width: `${displayMetrics.amPct}%` }}></div>
                     </div>
                   </div>
 
-                  <div className="relative z-10">
-                    <div className="flex justify-between items-end mb-1">
+                  {/* Fábrica (AMF) CLICÁVEL */}
+                  <div 
+                    onClick={() => setTipoFilter(tipoFilter === 'AMF' ? 'Todos' : 'AMF')}
+                    className={`relative z-10 cursor-pointer p-3 rounded-xl transition-all border ${
+                      tipoFilter === 'AMF' ? 'bg-orange-50/80 border-orange-200 shadow-sm scale-[1.02]' : 
+                      tipoFilter === 'AM' ? 'opacity-40 grayscale-[50%] hover:opacity-100 hover:grayscale-0' : 'border-transparent hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex justify-between items-end mb-2">
                       <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
                         <span className="w-2.5 h-2.5 rounded-full bg-orange-500"></span> Fábrica (AMF)
                       </span>
-                      <span className="text-xl font-black text-slate-900">{metrics.amfPct}%</span>
+                      <span className="text-xl font-black text-slate-900">{displayMetrics.amfPct}%</span>
                     </div>
-                    <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
-                      <div className="bg-orange-500 h-2.5 rounded-full transition-all duration-1000 ease-out" style={{ width: `${metrics.amfPct}%` }}></div>
+                    <div className="w-full bg-slate-200/50 rounded-full h-2.5 overflow-hidden">
+                      <div className="bg-orange-500 h-2.5 rounded-full transition-all duration-1000 ease-out" style={{ width: `${displayMetrics.amfPct}%` }}></div>
                     </div>
                   </div>
                 </div>
@@ -680,16 +680,16 @@
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col justify-center h-full">
                   <p className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-2">Média Geral</p>
                   <div className="flex items-center gap-4">
-                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${metrics.media >= 0 ? 'bg-blue-50 text-blue-600' : 'bg-red-50 text-red-600'}`}>
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${displayMetrics.media >= 0 ? 'bg-blue-50 text-blue-600' : 'bg-red-50 text-red-600'}`}>
                       <i className="fa-solid fa-arrow-trend-up text-xl"></i>
                     </div>
                     <div>
                       <div className="flex items-baseline gap-1">
-                        <h3 className="text-3xl font-black text-slate-900 tracking-tighter">{Math.abs(metrics.media)}</h3>
+                        <h3 className="text-3xl font-black text-slate-900 tracking-tighter">{Math.abs(displayMetrics.media)}</h3>
                         <span className="text-sm font-semibold text-slate-500">dias</span>
                       </div>
-                      <p className={`text-xs font-semibold ${metrics.media >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
-                        {metrics.media >= 0 ? 'Adiantado' : 'Atrasado'}
+                      <p className={`text-xs font-semibold ${displayMetrics.media >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                        {displayMetrics.media >= 0 ? 'Adiantado' : 'Atrasado'}
                       </p>
                     </div>
                   </div>
@@ -709,7 +709,7 @@
                     )}
                   </div>
                   <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-1 rounded-md uppercase tracking-wide">
-                    {metrics.totalItens} Itens
+                    {chartMetrics.totalItens} Itens Analisados
                   </span>
                 </div>
                 
@@ -721,10 +721,10 @@
                   >
                     <div className="flex justify-between text-sm font-semibold mb-2">
                       <span className="text-emerald-700 flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Entregas no Prazo</span>
-                      <span className="text-slate-600">{metrics.distribuicao.noPrazo} itens</span>
+                      <span className="text-slate-600">{chartMetrics.distribuicao.noPrazo} itens</span>
                     </div>
                     <div className="w-full bg-slate-100 rounded-full h-5 overflow-hidden shadow-inner">
-                      <div className="bg-emerald-500 h-5 rounded-full transition-all" style={{ width: `${metrics.totalItens ? (metrics.distribuicao.noPrazo / metrics.totalItens) * 100 : 0}%` }}></div>
+                      <div className="bg-emerald-500 h-5 rounded-full transition-all" style={{ width: `${chartMetrics.totalItens ? (chartMetrics.distribuicao.noPrazo / chartMetrics.totalItens) * 100 : 0}%` }}></div>
                     </div>
                   </div>
 
@@ -735,16 +735,16 @@
                   >
                     <div className="flex justify-between text-sm font-semibold mb-2">
                       <span className="text-red-700 flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-red-500"></span> Entregas em Atraso</span>
-                      <span className="text-slate-600">{metrics.distribuicao.atrasado} itens</span>
+                      <span className="text-slate-600">{chartMetrics.distribuicao.atrasado} itens</span>
                     </div>
                     <div className="w-full bg-slate-100 rounded-full h-5 overflow-hidden shadow-inner">
-                      <div className="bg-red-500 h-5 rounded-full transition-all" style={{ width: `${metrics.totalItens ? (metrics.distribuicao.atrasado / metrics.totalItens) * 100 : 0}%` }}></div>
+                      <div className="bg-red-500 h-5 rounded-full transition-all" style={{ width: `${chartMetrics.totalItens ? (chartMetrics.distribuicao.atrasado / chartMetrics.totalItens) * 100 : 0}%` }}></div>
                     </div>
                   </div>
                 </div>
                 
                 <p className="text-[10px] text-slate-400 font-semibold text-center uppercase tracking-widest mt-4 flex items-center justify-center gap-1">
-                  <i className="fa-solid fa-hand-pointer"></i> Clique nas barras para filtrar
+                  <i className="fa-solid fa-hand-pointer"></i> Clique nas barras para filtrar a tabela
                 </p>
               </div>
 
@@ -755,7 +755,7 @@
                   </h3>
                 </div>
                 <div className="overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-200 flex-1 space-y-3">
-                  {metrics.rankingVendedores.map((v, i) => (
+                  {displayMetrics.rankingVendedores.map((v, i) => (
                     <div key={v.nome} className="flex items-center justify-between p-3 bg-slate-50 hover:bg-slate-100 transition-colors rounded-2xl border border-slate-100">
                       <div className="flex items-center gap-3">
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${
@@ -776,7 +776,7 @@
                       </div>
                     </div>
                   ))}
-                  {metrics.rankingVendedores.length === 0 && (
+                  {displayMetrics.rankingVendedores.length === 0 && (
                     <div className="text-center text-slate-400 py-10 text-sm font-medium">Sem dados para ranking</div>
                   )}
                 </div>
@@ -790,7 +790,7 @@
                   <p className="text-sm font-medium text-slate-500">Comparativo direto entre o Prazo Acordado e a Fatura Real.</p>
                 </div>
                 <span className="text-sm font-bold text-slate-600 bg-slate-100 px-4 py-2 rounded-xl flex items-center gap-2">
-                  {performanceFilter !== 'Todos' && <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>}
+                  {(performanceFilter !== 'Todos' || tipoFilter !== 'Todos') && <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>}
                   Listando {new Set(finalFilteredData.map(item => item.pedido)).size} pedidos ({finalFilteredData.length} itens)
                 </span>
               </div>
@@ -898,7 +898,6 @@
                                           </span>
                                         )}
                                         
-                                        {/* AQUI ESTÁ A JUSTIFICATIVA IMPORTADA DO OTIF */}
                                         {item.justificativa && (
                                           <span className="text-[10px] font-semibold text-red-800 bg-red-100 border border-red-300 px-2 py-1 rounded-md text-center max-w-[150px] whitespace-normal leading-tight shadow-sm" title={item.justificativa}>
                                             <i className="fa-solid fa-circle-info mr-1"></i>
