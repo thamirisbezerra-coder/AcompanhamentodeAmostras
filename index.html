@@ -27,9 +27,12 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo } = React;
 
-    // URL da planilha
+    // URLs das planilhas
     const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/17M3amZmDXUhFZK9F81p5BPK3B8OdqL_RF23Z1230r8A/export?format=csv&gid=620539506';
     const EDIT_SHEET_URL = 'https://docs.google.com/spreadsheets/d/17M3amZmDXUhFZK9F81p5BPK3B8OdqL_RF23Z1230r8A/edit?gid=620539506#gid=620539506';
+    
+    // URL da Planilha OTIF 2026 (Para as justificativas)
+    const OTIF_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vS5Ff8EGb8C9JT2J8d56bVP8OByLV8NaxwjDdMFHq8SMAeupelyoO7O-FS4r6phRIJQsQn0NLnTMT9a/pub?gid=78219648&single=true&output=csv';
 
     function App() {
       const [data, setData] = useState([]);
@@ -44,7 +47,8 @@
       const [segmentFilter, setSegmentFilter] = useState('Todos');
       const [vendedorFilter, setVendedorFilter] = useState('Todos');
       const [aromaFilter, setAromaFilter] = useState(false);
-      const [performanceFilter, setPerformanceFilter] = useState('Todos'); // NOVO: Filtro clicável no gráfico
+      const [performanceFilter, setPerformanceFilter] = useState('Todos'); 
+      const [showSegmentChart, setShowSegmentChart] = useState(false);
 
       // 1. FUNÇÕES AUXILIARES
       const parseSheetDate = (dateStr) => {
@@ -58,7 +62,48 @@
         return isNaN(d.getTime()) ? null : d;
       };
 
-      // NOVO: Cálculo de Dias Úteis para o Lead Time
+      const getBrazilianHolidays = (year) => {
+        const holidays = [
+          `${year}-01-01`, `${year}-04-21`, `${year}-05-01`, `${year}-09-07`, 
+          `${year}-10-12`, `${year}-11-02`, `${year}-11-15`, `${year}-12-25`,
+        ];
+        
+        const a = year % 19, b = Math.floor(year / 100), c = year % 100;
+        const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
+        const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+        const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;
+        const m = Math.floor((a + 11 * h + 22 * l) / 451);
+        const month = Math.floor((h + l - 7 * m + 114) / 31);
+        const day = ((h + l - 7 * m + 114) % 31) + 1;
+        
+        const easter = new Date(year, month - 1, day);
+        
+        const addDays = (date, days) => {
+          const res = new Date(date);
+          res.setDate(res.getDate() + days);
+          return `${res.getFullYear()}-${String(res.getMonth() + 1).padStart(2, '0')}-${String(res.getDate()).padStart(2, '0')}`;
+        };
+
+        holidays.push(addDays(easter, -48)); 
+        holidays.push(addDays(easter, -47)); 
+        holidays.push(addDays(easter, -2));  
+        holidays.push(addDays(easter, 60));  
+
+        return holidays;
+      };
+
+      const holidaysCache = {};
+      const isBusinessDay = (date) => {
+        const day = date.getDay();
+        if (day === 0 || day === 6) return false; 
+        
+        const yyyy = date.getFullYear();
+        if (!holidaysCache[yyyy]) holidaysCache[yyyy] = getBrazilianHolidays(yyyy);
+        
+        const dateStr = `${yyyy}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        return !holidaysCache[yyyy].includes(dateStr);
+      };
+
       const calculateBusinessDays = (start, end) => {
         if (!start || !end || isNaN(start.getTime()) || isNaN(end.getTime())) return null;
         let count = 0;
@@ -67,22 +112,44 @@
         let target = new Date(end);
         target.setHours(0,0,0,0);
 
-        if (cur > target) return 0; // Se emitido depois da entrega, considera 0
+        if (cur > target) return 0;
 
         while (cur < target) {
           cur.setDate(cur.getDate() + 1);
-          const day = cur.getDay();
-          if (day !== 0 && day !== 6) { // 0 = Domingo, 6 = Sábado
-            count++;
-          }
+          if (isBusinessDay(cur)) count++;
         }
         return count;
       };
 
-      const calculateDaysDiff = (prev, env) => {
-        if (!prev || !env) return null;
-        const diffTime = prev.getTime() - env.getTime();
-        return Math.round(diffTime / (1000 * 60 * 60 * 24)); 
+      const calculateBusinessDaysDiff = (prevista, emissaoNF) => {
+        if (!prevista || !emissaoNF || isNaN(prevista.getTime()) || isNaN(emissaoNF.getTime())) return null;
+        
+        let cur = new Date(emissaoNF);
+        cur.setHours(0,0,0,0);
+        let target = new Date(prevista);
+        target.setHours(0,0,0,0);
+
+        const timeDiff = target.getTime() - cur.getTime();
+        if (timeDiff === 0) return 0;
+
+        let count = 0;
+        if (timeDiff > 0) {
+          while (cur < target) {
+            cur.setDate(cur.getDate() + 1);
+            if (isBusinessDay(cur)) count++;
+          }
+          return count;
+        } else {
+          cur = new Date(prevista);
+          cur.setHours(0,0,0,0);
+          target = new Date(emissaoNF);
+          target.setHours(0,0,0,0);
+          while (cur < target) {
+            cur.setDate(cur.getDate() + 1);
+            if (isBusinessDay(cur)) count++;
+          }
+          return -count;
+        }
       };
 
       const formatDate = (dateObj) => {
@@ -91,26 +158,51 @@
       };
 
       const cleanString = (str) => str ? str.replace(/["\r]/g, '').trim() : '';
+      const removeAccents = (str) => str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
-      // NOVO: Função para remover acentos e garantir que o sistema ache as colunas
-      const removeAccents = (str) => {
-        return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-      };
-
-      // 2. BUSCA DE DADOS
+      // 2. BUSCA DE DADOS (AGORA PUXANDO PRINCIPAL + OTIF)
       useEffect(() => {
         const fetchData = async () => {
           try {
-            const response = await fetch(SHEET_CSV_URL);
-            if (!response.ok) throw new Error('Falha ao ler a planilha.');
-            
-            const text = await response.text();
+            // Requisição paralela: Tenta puxar a Principal e a OTIF ao mesmo tempo
+            const [mainResponse, otifResponse] = await Promise.all([
+              fetch(SHEET_CSV_URL).catch(() => null),
+              fetch(OTIF_CSV_URL).catch(() => null)
+            ]);
+
+            if (!mainResponse || !mainResponse.ok) {
+              throw new Error('Falha ao ler a planilha principal.');
+            }
+
+            const text = await mainResponse.text();
             if (text.toLowerCase().includes('<!doctype html>')) {
               throw new Error('A planilha não está publicada.');
             }
 
+            // Mapeamento Inteligente da OTIF (Buscando Justificativas)
+            const justificativasMap = new Map();
+            if (otifResponse && otifResponse.ok) {
+              const otifText = await otifResponse.text();
+              if (!otifText.toLowerCase().includes('<!doctype html>')) {
+                const otifLines = otifText.split('\n').filter(line => line.trim() !== '');
+                // Começa da linha 1 para pular cabeçalhos
+                for (let i = 1; i < otifLines.length; i++) {
+                  const cols = otifLines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(cleanString);
+                  // Coluna B é o índice 1 (Pedido) e Coluna AB é o índice 27 (Justificativa)
+                  const ped = cols[1];
+                  const just = cols[27]; 
+                  
+                  if (ped) {
+                    // Como o loop lê do topo ao fundo, o último registro desse pedido
+                    // irá naturalmente sobrescrever os antigos no Map! (Sempre o mais recente)
+                    justificativasMap.set(ped, just);
+                  }
+                }
+              }
+            }
+
+            // Processamento da Planilha Principal
             const lines = text.split('\n').filter(line => line.trim() !== '');
-            // Aplica a remoção de acentos nos cabeçalhos para não ter erro na leitura
             const rawHeaders = lines[0].split(',').map(h => removeAccents(cleanString(h)));
             
             const findCol = (keywords, exclude = []) => {
@@ -139,9 +231,11 @@
               const dataEntregaObj = parseSheetDate(cols[idx.entrega]);
               const dataEmissaoNFObj = parseSheetDate(cols[idx.emissaoNF]);
               
+              const numPedido = cols[idx.pedido] || '-';
+
               return {
                 id: index,
-                pedido: cols[idx.pedido] || '-',
+                pedido: numPedido,
                 tipo: cols[idx.tipo] ? cols[idx.tipo].toUpperCase() : '-',
                 emissaoStr: cols[idx.emissao] || '-',
                 emissaoObj: dataEmissaoObj,
@@ -155,8 +249,10 @@
                 vendedor: cols[idx.vendedor] || '-',
                 nf: cols[idx.nf] || '-',
                 emissaoNFObj: dataEmissaoNFObj,
-                diasAntecipacao: calculateDaysDiff(dataEntregaObj, dataEmissaoNFObj),
-                leadTime: calculateBusinessDays(dataEmissaoObj, dataEntregaObj)
+                diasAntecipacao: calculateBusinessDaysDiff(dataEntregaObj, dataEmissaoNFObj),
+                leadTime: calculateBusinessDays(dataEmissaoObj, dataEntregaObj),
+                // Vincula a justificativa mapeada da planilha OTIF!
+                justificativa: justificativasMap.get(numPedido) || null
               };
             }).filter(item => item.pedido !== '-');
 
@@ -184,10 +280,7 @@
           const baseDate = new Date();
           baseDate.setDate(baseDate.getDate() - Math.floor(Math.random() * 30)); 
           const entregaObj = new Date(baseDate);
-          
-          // Gera uma data de emissão de 2 a 12 dias antes da entrega
           const emissaoObj = new Date(entregaObj.getTime() - (Math.floor(Math.random() * 10 + 2) * 86400000)); 
-
           const daysOffset = isLate ? -Math.floor(Math.random() * 4 + 1) : Math.floor(Math.random() * 8 + 1);
           const emissaoNFObj = new Date(entregaObj);
           emissaoNFObj.setDate(entregaObj.getDate() - daysOffset);
@@ -208,15 +301,16 @@
             vendedor: 'Representante Padrão',
             nf: `NF-${50000 + i}`,
             emissaoNFObj,
-            diasAntecipacao: daysOffset,
-            leadTime: calculateBusinessDays(emissaoObj, entregaObj)
+            diasAntecipacao: calculateBusinessDaysDiff(entregaObj, emissaoNFObj),
+            leadTime: calculateBusinessDays(emissaoObj, entregaObj),
+            justificativa: isLate ? 'Falta de Matéria Prima / Em Produção' : null
           });
         }
         setData(mock);
         setLoading(false);
       };
 
-      // 3. EXTRAÇÃO DE SEGMENTOS ÚNICOS
+      // 3. EXTRAÇÃO DE SEGMENTOS E VENDEDORES
       const segments = useMemo(() => {
         const unique = [...new Set(data.map(item => item.divisao))].filter(d => d && d !== '-');
         return ['Todos', ...unique.sort()];
@@ -227,7 +321,7 @@
         return ['Todos', ...unique.sort()];
       }, [data]);
 
-      // 4. FILTRAGEM BASE (Para alimentar os Gráficos)
+      // 4. FILTRAGEM BASE
       const baseFilteredData = useMemo(() => {
         return data.filter(item => {
           const search = searchQuery.toLowerCase();
@@ -239,7 +333,6 @@
           const matchSegment = segmentFilter === 'Todos' || item.divisao === segmentFilter;
           const matchVendedor = vendedorFilter === 'Todos' || item.vendedor === vendedorFilter;
 
-          // Lógica do Filtro de Aromas: Verifica se a descrição começa com 'AROMA'
           const isAroma = item.descricao && item.descricao.toUpperCase().trim().startsWith('AROMA');
           const matchAroma = !aromaFilter || isAroma;
 
@@ -262,59 +355,92 @@
         });
       }, [data, searchQuery, startDate, endDate, dateFilterType, segmentFilter, vendedorFilter, aromaFilter]);
 
-      // 5. MÉTRICAS E DADOS PARA GRÁFICOS (Mantém o gráfico fixo, usando a Base)
+      // 5. MÉTRICAS
       const metrics = useMemo(() => {
         const validData = baseFilteredData.filter(d => d.diasAntecipacao !== null);
+        const totalItens = validData.length;
 
-        // NOVO: Agrupa por número do pedido para não duplicar métricas (vários produtos no mesmo pedido = 1 contagem)
-        const uniqueOrdersMap = new Map();
-        validData.forEach(item => {
-          if (!uniqueOrdersMap.has(item.pedido)) {
-            uniqueOrdersMap.set(item.pedido, item);
-          }
-        });
-        const uniqueValidData = Array.from(uniqueOrdersMap.values());
-        
-        // Calcula o total geral de pedidos únicos (mesmo os que não têm data ainda)
-        const totalUniqueOrders = new Set(baseFilteredData.map(d => d.pedido)).size;
-
-        if (uniqueValidData.length === 0) return { media: 0, noPrazoPct: 0, total: totalUniqueOrders, envios: 0, distribuicao: { adiantadoFolga: 0, adiantadoAperto: 0, atrasado: 0 } };
+        if (totalItens === 0) return { media: 0, noPrazoPct: 0, totalItens: 0, amPct: 0, amfPct: 0, distribuicao: { noPrazo: 0, atrasado: 0 }, rankingVendedores: [], segmentChartData: [] };
         
         let soma = 0;
         let qtdNoPrazo = 0;
         
-        // Categorias para o Gráfico de Barras
-        const distribuicao = { adiantadoFolga: 0, adiantadoAperto: 0, atrasado: 0 };
+        let amTotal = 0, amNoPrazo = 0;
+        let amfTotal = 0, amfNoPrazo = 0;
 
-        uniqueValidData.forEach(item => {
+        const distribuicao = { noPrazo: 0, atrasado: 0 };
+        const vendedorMap = new Map();
+        const segmentStats = {};
+
+        validData.forEach(item => {
           const dias = item.diasAntecipacao;
+          const isNoPrazo = dias >= 0;
+          
           soma += dias;
-          if (dias >= 0) {
+          
+          if (isNoPrazo) {
             qtdNoPrazo++;
-            if (dias > 2) distribuicao.adiantadoFolga++;
-            else distribuicao.adiantadoAperto++;
+            distribuicao.noPrazo++;
           } else {
             distribuicao.atrasado++;
           }
+
+          if (item.tipo && item.tipo.includes('AMF')) {
+            amfTotal++;
+            if (isNoPrazo) amfNoPrazo++;
+          } else if (item.tipo && item.tipo.includes('AM')) {
+            amTotal++;
+            if (isNoPrazo) amNoPrazo++;
+          }
+
+          const seg = item.divisao || 'Outros';
+          if (!segmentStats[seg]) segmentStats[seg] = { total: 0, noPrazo: 0 };
+          segmentStats[seg].total++;
+          if (isNoPrazo) segmentStats[seg].noPrazo++;
+
+          if (!vendedorMap.has(item.vendedor)) {
+            vendedorMap.set(item.vendedor, { nome: item.vendedor, somaDias: 0, totalEntregas: 0, noPrazo: 0 });
+          }
+          const vData = vendedorMap.get(item.vendedor);
+          vData.somaDias += dias;
+          vData.totalEntregas += 1;
+          if (isNoPrazo) vData.noPrazo += 1;
         });
 
+        const amPct = amTotal > 0 ? Math.round((amNoPrazo / amTotal) * 100) : 0;
+        const amfPct = amfTotal > 0 ? Math.round((amfNoPrazo / amfTotal) * 100) : 0;
+
+        const rankingVendedores = Array.from(vendedorMap.values()).map(v => ({
+          ...v,
+          media: Math.round((v.somaDias / v.totalEntregas) * 10) / 10,
+          eficiencia: Math.round((v.noPrazo / v.totalEntregas) * 100)
+        })).sort((a, b) => b.media - a.media);
+
+        const segmentChartData = Object.keys(segmentStats).map(k => ({
+          nome: k,
+          pct: Math.round((segmentStats[k].noPrazo / segmentStats[k].total) * 100),
+          total: segmentStats[k].total
+        })).sort((a, b) => b.pct - a.pct); 
+
         return {
-          total: totalUniqueOrders,
-          envios: uniqueValidData.length,
-          media: Math.round((soma / uniqueValidData.length) * 10) / 10,
-          noPrazoPct: Math.round((qtdNoPrazo / uniqueValidData.length) * 100),
-          distribuicao
+          totalItens,
+          media: Math.round((soma / totalItens) * 10) / 10,
+          noPrazoPct: Math.round((qtdNoPrazo / totalItens) * 100),
+          amPct,
+          amfPct,
+          distribuicao,
+          rankingVendedores,
+          segmentChartData
         };
       }, [baseFilteredData]);
 
-      // 6. FILTRAGEM FINAL (Aplica o clique do gráfico para cortar a Tabela)
+      // 6. FILTRAGEM FINAL
       const finalFilteredData = useMemo(() => {
         return baseFilteredData.filter(item => {
           if (performanceFilter === 'Todos') return true;
           if (item.diasAntecipacao === null) return false;
           
-          if (performanceFilter === 'adiantadoFolga') return item.diasAntecipacao > 2;
-          if (performanceFilter === 'adiantadoAperto') return item.diasAntecipacao >= 0 && item.diasAntecipacao <= 2;
+          if (performanceFilter === 'noPrazo') return item.diasAntecipacao >= 0;
           if (performanceFilter === 'atrasado') return item.diasAntecipacao < 0;
           return true;
         }).sort((a, b) => {
@@ -343,7 +469,6 @@
             </div>
           )}
 
-          {/* HEADER LUXUOSO */}
           <header className="bg-white/80 backdrop-blur-md border-b border-slate-200 sticky top-0 z-40 shadow-sm">
             <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
               <div className="flex items-center gap-5">
@@ -375,7 +500,6 @@
 
           <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
             
-            {/* BARRA DE PESQUISA E FILTROS INTELIGENTES */}
             <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 mb-8 flex flex-col lg:flex-row justify-between items-center gap-5">
               
               <div className="relative w-full lg:w-96 group">
@@ -393,7 +517,6 @@
 
               <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
                 
-                {/* Filtro por Divisão Comercial */}
                 <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 flex-1 sm:flex-none">
                   <i className="fa-solid fa-filter text-indigo-500"></i>
                   <select 
@@ -407,7 +530,6 @@
                   </select>
                 </div>
 
-                {/* Filtro por Vendedor */}
                 <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 flex-1 sm:flex-none">
                   <i className="fa-solid fa-users text-purple-500"></i>
                   <select 
@@ -421,7 +543,6 @@
                   </select>
                 </div>
 
-                {/* Filtro de Aromas (Toggle Inteligente) */}
                 <button
                   onClick={() => setAromaFilter(!aromaFilter)}
                   className={`flex items-center justify-center gap-2 border rounded-xl px-4 py-3 text-sm font-semibold transition-all flex-1 sm:flex-none ${
@@ -435,9 +556,21 @@
                   {aromaFilter ? 'Aromas: Ligado' : 'Apenas Aromas'}
                 </button>
 
-                <div className="h-8 border-l border-slate-200 hidden sm:block"></div>
+                <button
+                  onClick={() => setShowSegmentChart(!showSegmentChart)}
+                  className={`flex items-center justify-center gap-2 border rounded-xl px-4 py-3 text-sm font-semibold transition-all flex-1 sm:flex-none ${
+                    showSegmentChart
+                      ? 'bg-blue-100 border-blue-300 text-blue-700 shadow-inner'
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                  title="Mostrar o gráfico comparativo de Divisões Comerciais"
+                >
+                  <i className="fa-solid fa-chart-column"></i>
+                  {showSegmentChart ? 'Gráfico: Aberto' : 'Ver Setores'}
+                </button>
 
-                {/* Filtros de Data */}
+                <div className="h-8 border-l border-slate-200 hidden xl:block"></div>
+
                 <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 flex-1 sm:flex-none">
                   <i className="fa-solid fa-calendar-days text-blue-500"></i>
                   <select 
@@ -468,119 +601,188 @@
               </div>
             </div>
 
-            {/* ÁREA DE KPIS & GRÁFICOS (DESTAQUE VISUAL) */}
+            {showSegmentChart && (
+              <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 mb-8 transition-all duration-300">
+                <div className="flex justify-between items-center mb-8">
+                  <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <i className="fa-solid fa-chart-column text-blue-500"></i> Pontualidade de Entrega por Divisão Comercial
+                  </h3>
+                  <span className="text-xs bg-blue-50 text-blue-600 font-bold px-3 py-1.5 rounded-lg uppercase tracking-wide border border-blue-100">
+                    % de Itens no Prazo
+                  </span>
+                </div>
+                
+                <div className="flex items-end gap-3 h-56 w-full overflow-x-auto overflow-y-hidden pb-4 scrollbar-thin scrollbar-thumb-slate-300 px-2">
+                  {metrics.segmentChartData.map((seg) => (
+                    <div key={seg.nome} className="flex flex-col items-center justify-end flex-1 min-w-[70px] h-full group relative">
+                       <div className="absolute bottom-full mb-2 bg-slate-800 text-white text-[10px] py-1.5 px-3 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10 font-medium">
+                          {seg.total} itens despachados
+                       </div>
+                       
+                       <div className="flex flex-col items-center mb-1.5 gap-0.5">
+                         <span className="text-sm font-black text-slate-700 leading-none">{seg.pct}%</span>
+                         <span className="text-[9px] font-bold text-slate-500 leading-none">{seg.total} {seg.total === 1 ? 'item' : 'itens'}</span>
+                       </div>
+                       
+                       <div
+                         className={`w-full max-w-[45px] rounded-t-lg shadow-sm group-hover:opacity-80 transition-all duration-500 ${
+                           seg.pct >= 85 ? 'bg-emerald-400' : 
+                           seg.pct >= 60 ? 'bg-amber-400' : 'bg-red-400'
+                         }`}
+                         style={{ height: `${Math.max(seg.pct, 8)}%` }} 
+                       ></div>
+                       
+                       <span className="text-[9.5px] font-bold text-slate-500 text-center uppercase mt-3 flex items-center justify-center truncate w-full px-1 h-8" title={seg.nome}>
+                         {seg.nome}
+                       </span>
+                    </div>
+                  ))}
+                  {metrics.segmentChartData.length === 0 && (
+                     <div className="w-full text-center text-slate-400 py-10 font-medium">Sem dados para exibir.</div>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
               
-              {/* Coluna Esquerda: Cartões de KPI */}
-              <div className="lg:col-span-4 flex flex-col gap-6">
-                {/* KPI Principal */}
+              <div className="lg:col-span-3 flex flex-col gap-6">
+                
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col justify-center h-full relative overflow-hidden group">
-                  <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-emerald-100 to-transparent rounded-bl-full opacity-50"></div>
-                  <p className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-2 relative z-10">Eficiência de Entrega</p>
-                  <div className="flex items-end gap-3 relative z-10 mb-4">
-                    <h3 className="text-5xl font-black text-slate-900 tracking-tighter">{metrics.noPrazoPct}%</h3>
-                    <span className="text-sm font-medium text-emerald-600 mb-1 flex items-center gap-1">
-                      <i className="fa-solid fa-circle-check"></i> No Prazo
-                    </span>
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-indigo-100 to-transparent rounded-bl-full opacity-50"></div>
+                  <p className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-6 relative z-10">Eficiência de Entrega</p>
+                  
+                  <div className="mb-5 relative z-10">
+                    <div className="flex justify-between items-end mb-1">
+                      <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-indigo-500"></span> Amostras (AM)
+                      </span>
+                      <span className="text-xl font-black text-slate-900">{metrics.amPct}%</span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                      <div className="bg-indigo-500 h-2.5 rounded-full transition-all duration-1000 ease-out" style={{ width: `${metrics.amPct}%` }}></div>
+                    </div>
                   </div>
-                  <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
-                    <div className="bg-emerald-500 h-2.5 rounded-full transition-all duration-1000 ease-out" style={{ width: `${metrics.noPrazoPct}%` }}></div>
+
+                  <div className="relative z-10">
+                    <div className="flex justify-between items-end mb-1">
+                      <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-orange-500"></span> Fábrica (AMF)
+                      </span>
+                      <span className="text-xl font-black text-slate-900">{metrics.amfPct}%</span>
+                    </div>
+                    <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                      <div className="bg-orange-500 h-2.5 rounded-full transition-all duration-1000 ease-out" style={{ width: `${metrics.amfPct}%` }}></div>
+                    </div>
                   </div>
                 </div>
 
-                {/* KPI Secundário */}
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col justify-center h-full">
-                  <p className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-2">Média de Antecipação</p>
+                  <p className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-2">Média Geral</p>
                   <div className="flex items-center gap-4">
-                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${metrics.media >= 0 ? 'bg-blue-50 text-blue-600' : 'bg-red-50 text-red-600'}`}>
-                      <i className="fa-solid fa-arrow-trend-up text-2xl"></i>
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${metrics.media >= 0 ? 'bg-blue-50 text-blue-600' : 'bg-red-50 text-red-600'}`}>
+                      <i className="fa-solid fa-arrow-trend-up text-xl"></i>
                     </div>
                     <div>
                       <div className="flex items-baseline gap-1">
-                        <h3 className="text-4xl font-black text-slate-900 tracking-tighter">{Math.abs(metrics.media)}</h3>
-                        <span className="text-lg font-semibold text-slate-500">dias</span>
+                        <h3 className="text-3xl font-black text-slate-900 tracking-tighter">{Math.abs(metrics.media)}</h3>
+                        <span className="text-sm font-semibold text-slate-500">dias</span>
                       </div>
-                      <p className={`text-sm font-semibold ${metrics.media >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
-                        {metrics.media >= 0 ? 'Enviado antes da Previsão' : 'Em atraso médio'}
+                      <p className={`text-xs font-semibold ${metrics.media >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                        {metrics.media >= 0 ? 'Adiantado' : 'Atrasado'}
                       </p>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Coluna Direita: Gráficos de Distribuição */}
-              <div className="lg:col-span-8 bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+              <div className="lg:col-span-5 bg-white p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col">
                 <div className="flex justify-between items-center mb-6">
                   <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                     <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                      <i className="fa-solid fa-chart-simple text-indigo-500"></i> Panorama de Performance
+                      <i className="fa-solid fa-chart-pie text-indigo-500"></i> Performance
                     </h3>
                     {performanceFilter !== 'Todos' && (
-                      <button onClick={() => setPerformanceFilter('Todos')} className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 px-3 py-1.5 rounded-lg transition-colors ml-0 sm:ml-2 font-bold flex items-center gap-1 w-max">
-                        <i className="fa-solid fa-xmark"></i> Limpar Filtro
+                      <button onClick={() => setPerformanceFilter('Todos')} className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded-md transition-colors ml-0 sm:ml-2 font-bold flex items-center gap-1 w-max uppercase">
+                        <i className="fa-solid fa-xmark"></i> Limpar
                       </button>
                     )}
                   </div>
-                  <span className="bg-slate-100 text-slate-600 text-xs font-bold px-3 py-1 rounded-lg uppercase tracking-wide">
-                    Total: {metrics.envios} Pedidos
+                  <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-1 rounded-md uppercase tracking-wide">
+                    {metrics.totalItens} Itens
                   </span>
                 </div>
                 
-                {/* Gráfico de Barras Customizado - AGORA INTERATIVO */}
-                <div className="space-y-3">
-                  {/* Barra: Adiantados com Folga (> 2 dias) */}
+                <div className="space-y-4 flex-1 flex flex-col justify-center">
                   <div 
-                    onClick={() => setPerformanceFilter(performanceFilter === 'adiantadoFolga' ? 'Todos' : 'adiantadoFolga')}
-                    className={`cursor-pointer transition-all p-3 rounded-2xl border ${performanceFilter === 'adiantadoFolga' ? 'bg-emerald-50 border-emerald-200 shadow-inner scale-[1.01]' : 'border-transparent hover:bg-slate-50'} ${performanceFilter !== 'Todos' && performanceFilter !== 'adiantadoFolga' ? 'opacity-40 grayscale-[50%]' : 'opacity-100'}`}
-                    title="Clique para filtrar apenas os pedidos com folga"
+                    onClick={() => setPerformanceFilter(performanceFilter === 'noPrazo' ? 'Todos' : 'noPrazo')}
+                    className={`cursor-pointer transition-all p-4 rounded-2xl border ${performanceFilter === 'noPrazo' ? 'bg-emerald-50 border-emerald-200 shadow-inner scale-[1.02]' : 'border-transparent hover:bg-slate-50'} ${performanceFilter !== 'Todos' && performanceFilter !== 'noPrazo' ? 'opacity-40 grayscale-[50%]' : 'opacity-100'}`}
+                    title="Clique para filtrar apenas entregas no prazo ou adiantadas"
                   >
                     <div className="flex justify-between text-sm font-semibold mb-2">
-                      <span className="text-emerald-700 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"></span> Adiantados com folga (&gt;2 dias)</span>
-                      <span className="text-slate-600">{metrics.distribuicao.adiantadoFolga} pedidos</span>
+                      <span className="text-emerald-700 flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Entregas no Prazo</span>
+                      <span className="text-slate-600">{metrics.distribuicao.noPrazo} itens</span>
                     </div>
-                    <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden shadow-inner">
-                      <div className="bg-emerald-500 h-4 rounded-full transition-all" style={{ width: `${metrics.envios ? (metrics.distribuicao.adiantadoFolga / metrics.envios) * 100 : 0}%` }}></div>
+                    <div className="w-full bg-slate-100 rounded-full h-5 overflow-hidden shadow-inner">
+                      <div className="bg-emerald-500 h-5 rounded-full transition-all" style={{ width: `${metrics.totalItens ? (metrics.distribuicao.noPrazo / metrics.totalItens) * 100 : 0}%` }}></div>
                     </div>
                   </div>
 
-                  {/* Barra: Adiantados/Prazo Justo (0 a 2 dias) */}
-                  <div 
-                    onClick={() => setPerformanceFilter(performanceFilter === 'adiantadoAperto' ? 'Todos' : 'adiantadoAperto')}
-                    className={`cursor-pointer transition-all p-3 rounded-2xl border ${performanceFilter === 'adiantadoAperto' ? 'bg-blue-50 border-blue-200 shadow-inner scale-[1.01]' : 'border-transparent hover:bg-slate-50'} ${performanceFilter !== 'Todos' && performanceFilter !== 'adiantadoAperto' ? 'opacity-40 grayscale-[50%]' : 'opacity-100'}`}
-                    title="Clique para filtrar apenas os pedidos no prazo justo"
-                  >
-                    <div className="flex justify-between text-sm font-semibold mb-2">
-                      <span className="text-blue-700 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-400"></span> Em cima do prazo (0 a 2 dias antes)</span>
-                      <span className="text-slate-600">{metrics.distribuicao.adiantadoAperto} pedidos</span>
-                    </div>
-                    <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden shadow-inner">
-                      <div className="bg-blue-400 h-4 rounded-full transition-all" style={{ width: `${metrics.envios ? (metrics.distribuicao.adiantadoAperto / metrics.envios) * 100 : 0}%` }}></div>
-                    </div>
-                  </div>
-
-                  {/* Barra: Atrasados */}
                   <div 
                     onClick={() => setPerformanceFilter(performanceFilter === 'atrasado' ? 'Todos' : 'atrasado')}
-                    className={`cursor-pointer transition-all p-3 rounded-2xl border ${performanceFilter === 'atrasado' ? 'bg-red-50 border-red-200 shadow-inner scale-[1.01]' : 'border-transparent hover:bg-slate-50'} ${performanceFilter !== 'Todos' && performanceFilter !== 'atrasado' ? 'opacity-40 grayscale-[50%]' : 'opacity-100'}`}
+                    className={`cursor-pointer transition-all p-4 rounded-2xl border ${performanceFilter === 'atrasado' ? 'bg-red-50 border-red-200 shadow-inner scale-[1.02]' : 'border-transparent hover:bg-slate-50'} ${performanceFilter !== 'Todos' && performanceFilter !== 'atrasado' ? 'opacity-40 grayscale-[50%]' : 'opacity-100'}`}
                     title="Clique para filtrar apenas os pedidos em atraso"
                   >
                     <div className="flex justify-between text-sm font-semibold mb-2">
-                      <span className="text-red-700 flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500"></span> Entregas em Atraso</span>
-                      <span className="text-slate-600">{metrics.distribuicao.atrasado} pedidos</span>
+                      <span className="text-red-700 flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-red-500"></span> Entregas em Atraso</span>
+                      <span className="text-slate-600">{metrics.distribuicao.atrasado} itens</span>
                     </div>
-                    <div className="w-full bg-slate-100 rounded-full h-4 overflow-hidden shadow-inner">
-                      <div className="bg-red-500 h-4 rounded-full transition-all" style={{ width: `${metrics.envios ? (metrics.distribuicao.atrasado / metrics.envios) * 100 : 0}%` }}></div>
+                    <div className="w-full bg-slate-100 rounded-full h-5 overflow-hidden shadow-inner">
+                      <div className="bg-red-500 h-5 rounded-full transition-all" style={{ width: `${metrics.totalItens ? (metrics.distribuicao.atrasado / metrics.totalItens) * 100 : 0}%` }}></div>
                     </div>
                   </div>
                 </div>
                 
                 <p className="text-[10px] text-slate-400 font-semibold text-center uppercase tracking-widest mt-4 flex items-center justify-center gap-1">
-                  <i className="fa-solid fa-hand-pointer"></i> Clique nas barras acima para filtrar a tabela
+                  <i className="fa-solid fa-hand-pointer"></i> Clique nas barras para filtrar
                 </p>
+              </div>
+
+              <div className="lg:col-span-4 bg-white p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col h-[400px]">
+                <div className="flex justify-between items-center mb-4 shrink-0">
+                  <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <i className="fa-solid fa-trophy text-yellow-500"></i> Top Vendedores
+                  </h3>
+                </div>
+                <div className="overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-200 flex-1 space-y-3">
+                  {metrics.rankingVendedores.map((v, i) => (
+                    <div key={v.nome} className="flex items-center justify-between p-3 bg-slate-50 hover:bg-slate-100 transition-colors rounded-2xl border border-slate-100">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${
+                          i === 0 ? 'bg-yellow-100 text-yellow-700' : 
+                          i === 1 ? 'bg-slate-200 text-slate-600' : 
+                          i === 2 ? 'bg-amber-100/50 text-amber-700' : 'bg-indigo-50 text-indigo-500'
+                        }`}>
+                          {i + 1}º
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-bold text-slate-800 truncate" title={v.nome}>{v.nome}</p>
+                          <p className="text-[10px] text-slate-500 uppercase tracking-wider">{v.totalEntregas} itens • {v.eficiencia}% no prazo</p>
+                        </div>
+                      </div>
+                      <div className={`text-right shrink-0 ml-2 ${v.media >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        <p className="text-sm font-black">{Math.abs(v.media)}d</p>
+                        <p className="text-[9px] uppercase tracking-widest font-bold">{v.media >= 0 ? 'Adiant.' : 'Atraso'}</p>
+                      </div>
+                    </div>
+                  ))}
+                  {metrics.rankingVendedores.length === 0 && (
+                    <div className="text-center text-slate-400 py-10 text-sm font-medium">Sem dados para ranking</div>
+                  )}
+                </div>
               </div>
             </div>
 
-            {/* TABELA DE DADOS - COM FOCO ABSOLUTO NO COMPARATIVO DE DATAS */}
             <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
               <div className="px-6 py-5 border-b border-slate-200 bg-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <div>
@@ -621,7 +823,6 @@
                         return (
                           <tr key={item.id} className="hover:bg-white transition-colors group">
                             
-                            {/* Coluna 1: Status e Pedido */}
                             <td className="px-6 py-5 align-middle">
                               <div className="flex flex-col">
                                 <div className="flex items-center gap-2">
@@ -636,7 +837,6 @@
                                 </div>
                                 <span className="text-xs font-medium text-slate-500 mt-0.5">Emissão: {item.emissaoStr}</span>
                                 
-                                {/* SELO DE LEAD TIME */}
                                 {item.leadTime !== null && (
                                   <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded uppercase w-max mt-1.5 flex items-center gap-1.5 shadow-sm">
                                     <i className="fa-solid fa-stopwatch"></i> Lead Time: {item.leadTime} dias úteis
@@ -649,7 +849,6 @@
                               </div>
                             </td>
 
-                            {/* Coluna 2: Cliente / Segmento / Produto */}
                             <td className="px-6 py-5 align-middle">
                               <div className="flex flex-col gap-1">
                                 <div className="flex items-start gap-3 flex-wrap">
@@ -670,18 +869,15 @@
                               </div>
                             </td>
 
-                            {/* Coluna 3: O GRANDE DESTAQUE DAS DATAS */}
                             <td className="px-6 py-4 align-middle">
                               {hasDates ? (
                                 <div className={`flex items-center justify-between p-3 rounded-2xl border ${isEarly ? 'bg-emerald-50/50 border-emerald-100/50' : 'bg-red-50/50 border-red-100/50'}`}>
                                   
-                                  {/* Data Prevista (Entrega) */}
                                   <div className="flex-1 text-right pr-4">
                                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Data Prevista</p>
                                     <p className="text-sm font-semibold text-slate-700">{formatDate(item.entregaObj)}</p>
                                   </div>
 
-                                  {/* Linha Central / Diferença */}
                                   <div className="flex flex-col items-center justify-center px-4 shrink-0">
                                     <span className={`inline-flex items-center justify-center px-3 py-1 rounded-full text-xs font-black shadow-sm ${
                                       isEarly ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
@@ -689,22 +885,34 @@
                                       {Math.abs(item.diasAntecipacao)} dias {isEarly ? 'adiantado' : 'atrasado'}
                                     </span>
                                     
-                                    {/* ALERTA DE SETOR EM ATRASO */}
-                                    {!isEarly && item.tipo !== '-' && (
-                                      <span className={`mt-1.5 text-[9px] font-bold px-2 py-0.5 rounded border uppercase text-center leading-tight shadow-sm ${
-                                        item.tipo.includes('AMF') 
-                                          ? 'bg-orange-100 text-orange-800 border-orange-400' 
-                                          : 'bg-red-100 text-red-800 border-red-300'
-                                      }`}>
-                                        Responsável:<br/>
-                                        {item.tipo.includes('AMF') ? 'Fábrica (AMF)' : item.tipo.includes('AM') ? 'Amostras (AM)' : item.tipo}
-                                      </span>
+                                    {!isEarly && (
+                                      <div className="flex flex-col items-center gap-1.5 mt-2">
+                                        {item.tipo !== '-' && (
+                                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded border uppercase text-center leading-tight shadow-sm ${
+                                            item.tipo.includes('AMF') 
+                                              ? 'bg-orange-100 text-orange-800 border-orange-400' 
+                                              : 'bg-red-100 text-red-800 border-red-300'
+                                          }`}>
+                                            Responsável:<br/>
+                                            {item.tipo.includes('AMF') ? 'Fábrica (AMF)' : item.tipo.includes('AM') ? 'Amostras (AM)' : item.tipo}
+                                          </span>
+                                        )}
+                                        
+                                        {/* AQUI ESTÁ A JUSTIFICATIVA IMPORTADA DO OTIF */}
+                                        {item.justificativa && (
+                                          <span className="text-[10px] font-semibold text-red-800 bg-red-100 border border-red-300 px-2 py-1 rounded-md text-center max-w-[150px] whitespace-normal leading-tight shadow-sm" title={item.justificativa}>
+                                            <i className="fa-solid fa-circle-info mr-1"></i>
+                                            {item.justificativa}
+                                          </span>
+                                        )}
+                                      </div>
                                     )}
 
-                                    <i className={`fa-solid fa-arrow-right mt-1.5 ${isEarly ? 'text-emerald-300' : 'text-red-300'}`}></i>
+                                    {isEarly && (
+                                      <i className="fa-solid fa-arrow-right mt-1.5 text-emerald-300"></i>
+                                    )}
                                   </div>
 
-                                  {/* Data Real (Emissão NF) */}
                                   <div className="flex-1 text-left pl-4">
                                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Emissão NF (Real)</p>
                                     <p className={`text-base font-black ${isEarly ? 'text-emerald-700' : 'text-red-700'}`}>
@@ -719,7 +927,6 @@
                               )}
                             </td>
 
-                            {/* Coluna 4: NF & Vendedor */}
                             <td className="px-6 py-5 align-middle text-right">
                               <div className="flex flex-col items-end gap-1">
                                 <span className="text-sm font-bold font-mono bg-slate-100 text-slate-700 px-3 py-1 rounded-lg border border-slate-200 shadow-sm inline-block">
@@ -745,7 +952,6 @@
       );
     }
 
-    // Inicializa o App na DIV #root
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
   </script>
