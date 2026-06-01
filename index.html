@@ -242,10 +242,10 @@
         });
       }, [data, searchQuery, startDate, endDate, dateFilterType, segmentFilter, vendedorFilter, aromaFilter]);
 
-      // 5. MÉTRICAS PARA BOTÕES TIPO (AM/AMF Inteligente)
+      // 5. MÉTRICAS PARA BOTÕES TIPO (Cálculo real de Eficiência Total baseada no Setor)
       const tipoMetrics = useMemo(() => {
-        let amTotal = 0, amNP = 0, amfTotal = 0, amfNP = 0;
-        let amFiltered = 0, amfFiltered = 0;
+        let amTotal = 0, amNP = 0, amAtrasado = 0;
+        let amfTotal = 0, amfNP = 0, amfAtrasado = 0;
 
         baseData.forEach(item => {
           if (item.diasAntecipacao !== null) {
@@ -253,41 +253,36 @@
             const isAM = item.tipo && !isAMF && item.tipo.includes('AM');
             const isNoPrazo = item.diasAntecipacao >= 0;
             
-            if (isAMF) { amfTotal++; if (isNoPrazo) amfNP++; }
-            else if (isAM) { amTotal++; if (isNoPrazo) amNP++; }
-
-            let matchesFilter = performanceFilter === 'Todos' || 
-                               (performanceFilter === 'noPrazo' && isNoPrazo) || 
-                               (performanceFilter === 'atrasado' && !isNoPrazo);
-            
-            if (matchesFilter) {
-               if (isAMF) amfFiltered++;
-               else if (isAM) amFiltered++;
+            if (isAMF) { 
+              amfTotal++; 
+              if (isNoPrazo) amfNP++; else amfAtrasado++;
+            }
+            else if (isAM) { 
+              amTotal++; 
+              if (isNoPrazo) amNP++; else amAtrasado++;
             }
           }
         });
 
-        const totalFiltered = amFiltered + amfFiltered;
-
         if (performanceFilter === 'atrasado') {
           return {
-            title: 'Origem dos Atrasos',
-            amPct: totalFiltered > 0 ? Number(((amFiltered / totalFiltered) * 100).toFixed(1)) : 0,
-            amfPct: totalFiltered > 0 ? Number(((amfFiltered / totalFiltered) * 100).toFixed(1)) : 0,
+            title: 'Taxa de Atraso por Setor',
+            amPct: amTotal > 0 ? Number(((amAtrasado / amTotal) * 100).toFixed(1)) : 0,
+            amfPct: amfTotal > 0 ? Number(((amfAtrasado / amfTotal) * 100).toFixed(1)) : 0,
             amLabel: 'Amostras (AM)',
             amfLabel: 'Fábrica (AMF)',
-            amSub: 'dos atrasos',
-            amfSub: 'dos atrasos'
+            amSub: `${amAtrasado} de ${amTotal} em atraso`,
+            amfSub: `${amfAtrasado} de ${amfTotal} em atraso`
           };
         } else if (performanceFilter === 'noPrazo') {
           return {
-            title: 'Volume no Prazo',
-            amPct: totalFiltered > 0 ? Number(((amFiltered / totalFiltered) * 100).toFixed(1)) : 0,
-            amfPct: totalFiltered > 0 ? Number(((amfFiltered / totalFiltered) * 100).toFixed(1)) : 0,
+            title: 'Eficiência (No Prazo)',
+            amPct: amTotal > 0 ? Number(((amNP / amTotal) * 100).toFixed(1)) : 0,
+            amfPct: amfTotal > 0 ? Number(((amfNP / amfTotal) * 100).toFixed(1)) : 0,
             amLabel: 'Amostras (AM)',
             amfLabel: 'Fábrica (AMF)',
-            amSub: 'das entregas',
-            amfSub: 'das entregas'
+            amSub: `${amNP} de ${amTotal} no prazo`,
+            amfSub: `${amfNP} de ${amfTotal} no prazo`
           };
         } else {
           return {
@@ -296,8 +291,8 @@
             amfPct: amfTotal > 0 ? Number(((amfNP / amfTotal) * 100).toFixed(1)) : 0,
             amLabel: 'Amostras (AM)',
             amfLabel: 'Fábrica (AMF)',
-            amSub: '',
-            amfSub: ''
+            amSub: `${amNP} de ${amTotal} no prazo`,
+            amfSub: `${amfNP} de ${amfTotal} no prazo`
           };
         }
       }, [baseData, performanceFilter]);
@@ -426,7 +421,6 @@
 
           <main className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
             
-            {/* FILTROS */}
             <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 mb-8 flex flex-col lg:flex-row justify-between items-center gap-5">
               
               <div className="relative w-full lg:w-96 group">
@@ -479,7 +473,6 @@
               </div>
             </div>
 
-            {/* GRÁFICO DE COLUNAS SEGURO CONTRA CORTES */}
             {showSegmentChart && (
               <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 mb-8 transition-all duration-300">
                 <div className="flex justify-between items-center mb-6">
@@ -494,18 +487,15 @@
                 <div className="flex items-end gap-3 h-72 w-full overflow-x-auto overflow-y-hidden pb-2 pt-6 scrollbar-thin scrollbar-thumb-slate-300 px-2">
                   {displayMetrics.segmentChartData.map((seg) => (
                     <div key={seg.nome} className="flex flex-col items-center flex-1 min-w-[70px] h-full group relative">
-                       {/* Tooltip Hover */}
                        <div className="absolute top-0 -mt-8 mb-2 bg-slate-800 text-white text-[10px] py-1.5 px-3 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10 font-medium">
                           {seg.total} itens
                        </div>
                        
-                       {/* Top Labels */}
                        <div className="flex flex-col items-center mb-2 gap-0.5 shrink-0">
                          <span className="text-sm font-black text-slate-700 leading-none">{seg.pct}%</span>
                          <span className="text-[9px] font-bold text-slate-500 leading-none">{seg.total} {seg.total === 1 ? 'item' : 'itens'}</span>
                        </div>
                        
-                       {/* Container da Barra com Altura Elástica Perfeita (Flex-1) */}
                        <div className="w-full flex-1 flex flex-col justify-end items-center relative">
                          <div
                            className={`w-full max-w-[45px] rounded-t-lg shadow-sm group-hover:opacity-80 transition-all duration-500 ${seg.pct >= 85 ? 'bg-emerald-400' : seg.pct >= 60 ? 'bg-amber-400' : 'bg-red-400'}`}
@@ -513,7 +503,6 @@
                          ></div>
                        </div>
                        
-                       {/* Bottom Label */}
                        <span className="text-[9.5px] font-bold text-slate-500 text-center uppercase mt-2 flex items-center justify-center truncate w-full px-1 h-6 shrink-0" title={seg.nome}>
                          {seg.nome}
                        </span>
@@ -524,11 +513,9 @@
               </div>
             )}
 
-            {/* ÁREA DE KPIS & GRÁFICOS */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
               
               <div className="lg:col-span-3 flex flex-col min-h-[480px]">
-                {/* CARTÃO AM / AMF INTELIGENTE - CUIDADOS CONTRA CORTES DE TEXTO */}
                 <div className="bg-white p-5 xl:p-6 rounded-3xl shadow-sm border border-slate-200 flex flex-col justify-start h-full relative overflow-hidden group">
                   <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-indigo-100 to-transparent rounded-bl-full opacity-50 pointer-events-none"></div>
                   
@@ -544,7 +531,6 @@
                     )}
                   </div>
                   
-                  {/* Amostras (AM) CLICÁVEL */}
                   <div onClick={() => setTipoFilter(tipoFilter === 'AM' ? 'Todos' : 'AM')} className={`mb-3 relative z-10 cursor-pointer p-3 rounded-xl transition-all border ${tipoFilter === 'AM' ? 'bg-indigo-50/80 border-indigo-200 shadow-sm scale-[1.02]' : tipoFilter === 'AMF' ? 'opacity-40 grayscale-[50%] hover:opacity-100 hover:grayscale-0' : 'border-transparent hover:bg-slate-50'}`}>
                     <div className="flex justify-between items-end mb-2">
                       <div className="flex flex-col">
@@ -560,7 +546,6 @@
                     </div>
                   </div>
 
-                  {/* Fábrica (AMF) CLICÁVEL */}
                   <div onClick={() => setTipoFilter(tipoFilter === 'AMF' ? 'Todos' : 'AMF')} className={`relative z-10 cursor-pointer p-3 rounded-xl transition-all border ${tipoFilter === 'AMF' ? 'bg-orange-50/80 border-orange-200 shadow-sm scale-[1.02]' : tipoFilter === 'AM' ? 'opacity-40 grayscale-[50%] hover:opacity-100 hover:grayscale-0' : 'border-transparent hover:bg-slate-50'}`}>
                     <div className="flex justify-between items-end mb-2">
                       <div className="flex flex-col">
@@ -579,7 +564,6 @@
               </div>
 
               <div className="lg:col-span-5 flex flex-col gap-6 min-h-[480px]">
-                {/* NOVO LUGAR PARA A MÉDIA GERAL */}
                 <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200 flex flex-wrap items-center justify-between shrink-0 gap-4">
                    <div className="flex items-center gap-4">
                       <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${displayMetrics.media >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-red-50 text-red-600'}`}>
