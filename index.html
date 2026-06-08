@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Calendar, Clock, CheckCircle2, AlertCircle, Mail, Search, 
-  X, Send, Building2, Package, UserCircle, Copy, Filter, Layers, Trash2, BellRing, Loader2, RefreshCw, BarChart3, PieChart as PieChartIcon, Menu, ChevronLeft, ExternalLink
+  X, Send, Building2, Package, UserCircle, Copy, Filter, Layers, Trash2, BellRing, Loader2, RefreshCw, BarChart3, PieChart as PieChartIcon, Menu, ChevronLeft, ExternalLink, Send as SendIcon, FileSpreadsheet
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -163,6 +163,29 @@ export default function App() {
     if (!emailModalData) return null;
     const order = emailModalData;
     
+    // Agrupa todos os produtos do mesmo pedido e cria uma TABELA HTML bem organizada
+    const orderProducts = orders.filter(o => o.pedido === order.pedido);
+    const tabelaProdutosHtml = `
+      <table style="width: 100%; max-width: 600px; border-collapse: collapse; margin: 15px 0; font-size: 13px; font-family: Arial, sans-serif;">
+        <thead>
+          <tr style="background-color: #f8fafc; border-bottom: 2px solid #cbd5e1; text-align: left;">
+            <th style="padding: 10px; border: 1px solid #e2e8f0; color: #475569;">Código</th>
+            <th style="padding: 10px; border: 1px solid #e2e8f0; color: #475569;">Produto</th>
+            <th style="padding: 10px; border: 1px solid #e2e8f0; text-align: center; color: #475569;">Qtde</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${orderProducts.map(p => `
+            <tr style="border-bottom: 1px solid #e2e8f0;">
+              <td style="padding: 10px; border: 1px solid #e2e8f0; font-weight: bold; color: #334155;">${p.codigoProduto || '-'}</td>
+              <td style="padding: 10px; border: 1px solid #e2e8f0; color: #334155;">${p.produto}</td>
+              <td style="padding: 10px; border: 1px solid #e2e8f0; text-align: center; font-weight: bold; color: #3b82f6;">${p.quantidade}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+
     let to = '';
     let ccList = [];
     let subject = '';
@@ -177,19 +200,22 @@ export default function App() {
         <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6;">
           <p>Prezado(a) <strong>${order.vendedor}</strong>,</p>
           <p>Esperamos que este e-mail o(a) encontre bem.</p>
-          <p>Entramos em contato referente à antecipação da amostra solicitada sob o <strong>Pedido ${order.pedido}</strong> para o cliente <strong>${order.razaoSocial}</strong>.</p>
-          <p>Conforme nossos registros, a amostra do produto <strong>${order.codigoProduto ? order.codigoProduto + ' - ' : ''}${order.produto}</strong> (Qtde: ${order.quantidade}) tinha um teste agendado para <strong>${formatarData(order.dataTeste)}</strong>.</p>
+          <p>Entramos em contato referente à antecipação da(s) amostra(s) solicitada(s) sob o <strong>Pedido ${order.pedido}</strong> para o cliente <strong>${order.razaoSocial}</strong>.</p>
+          <p>Conforme nossos registros, o(s) item(ns) abaixo tinha(m) um teste agendado para a data de <strong>${formatarData(order.dataTeste)}</strong>:</p>
+          
+          ${tabelaProdutosHtml}
+          
           <p>Para garantir a eficácia das nossas soluções, solicitamos um feedback detalhado sobre este teste:</p>
-          <ul style="color: #444;">
+          <ul style="color: #444; padding-left: 20px;">
             <li>O teste foi realizado conforme o previsto?</li>
-            <li>Como foi a performance do produto durante a aplicação?</li>
+            <li>Como foi a performance durante a aplicação?</li>
             <li>Houve aprovação técnica por parte do cliente?</li>
             <li>Quais são os próximos passos ou previsão para negócios decorrentes desta amostra?</li>
           </ul>
           <p>O seu retorno é fundamental para alinhamento com a gerência.</p>
           <br/>
           <p>Atenciosamente,</p>
-          <p><strong>${order.atendente}</strong><br/><span style="color: #666; font-size: 12px;">Setor de Amostras</span></p>
+          <p><strong>Setor de Amostras</strong></p>
           <br/>
           <img src="https://i.postimg.cc/J0G8jfMQ/as-02-(2).png" alt="Logo Doremus" style="max-height: 50px;" />
         </div>
@@ -197,24 +223,27 @@ export default function App() {
     } else {
       to = customerEmailInput;
       ccList = [order.emailVendedor, order.emailGerente, ...EMAILS_COPIA_FIXA].filter(Boolean);
-      subject = `Acompanhamento de Amostra Doremus - ${order.produto}`;
+      subject = `Acompanhamento de Amostras - Pedido ${order.pedido} - ${order.razaoSocial}`;
       
       htmlBody = `
         <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6;">
           <p>Prezados parceiros da <strong>${order.razaoSocial}</strong>,</p>
           <p>Gostaríamos de agradecer a confiança e a oportunidade de apresentar as soluções da Doremus.</p>
-          <p>Entramos em contato para acompanhar o recebimento e o teste da amostra referente ao produto <strong>${order.codigoProduto ? order.codigoProduto + ' - ' : ''}${order.produto}</strong>, enviada recentemente.</p>
+          <p>Entramos em contato para acompanhar o recebimento e o teste da(s) amostra(s) abaixo, enviada(s) recentemente sob o pedido <strong>${order.pedido}</strong>:</p>
+          
+          ${tabelaProdutosHtml}
+          
           <p>Nosso objetivo é garantir a excelência no atendimento. Por isso, gostaríamos de saber:</p>
-          <ul style="color: #444;">
+          <ul style="color: #444; padding-left: 20px;">
             <li>Os testes com a nossa solução já foram realizados?</li>
-            <li>Como vocês avaliam a performance e os resultados da nossa amostra em sua aplicação?</li>
+            <li>Como vocês avaliam a performance e os resultados em sua aplicação?</li>
             <li>Há algum ajuste necessário ou podemos seguir com os próximos passos comerciais?</li>
           </ul>
           <p>Nossa equipe, juntamente com o executivo de contas <strong>${order.vendedor}</strong>, está à total disposição para fornecer suporte técnico adicional caso seja necessário.</p>
           <p>Ficamos no aguardo de seus comentários.</p>
           <br/>
           <p>Atenciosamente,</p>
-          <p><strong>${order.atendente}</strong><br/><span style="color: #666; font-size: 12px;">Setor de Amostras - Doremus</span></p>
+          <p><strong>Setor de Amostras - Doremus</strong></p>
           <br/>
           <img src="https://i.postimg.cc/J0G8jfMQ/as-02-(2).png" alt="Logo Doremus" style="max-height: 50px;" />
         </div>
@@ -240,7 +269,7 @@ export default function App() {
     const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(details.to)}&cc=${encodeURIComponent(details.ccList.join(','))}&su=${encodeURIComponent(details.subject)}&body=${encodeURIComponent(textBody)}`;
     window.open(gmailUrl, '_blank');
     
-    if(confirm('O Gmail foi aberto. Deseja marcar este pedido como Cobrado (Roxo)?')) {
+    if(confirm('O Gmail foi aberto. Deseja marcar TODOS os itens deste pedido como Cobrado (Roxo)?')) {
       markAsCobrado(emailModalData.id, customerEmailInput);
     }
   };
@@ -254,7 +283,7 @@ export default function App() {
       return;
     }
 
-    if(!confirm('O e-mail será disparado agora mesmo e você receberá uma cópia. O pedido ficará Roxo. Deseja confirmar?')) return;
+    if(!confirm('O e-mail será disparado agora mesmo e você receberá uma cópia. TODOS os itens deste pedido ficarão Roxos. Deseja confirmar?')) return;
 
     setIsLoading(true);
     try {
@@ -396,6 +425,17 @@ export default function App() {
               <div className="pl-3 text-slate-400"><Search size={16} /></div>
               <input type="text" placeholder="Buscar pedido, cliente..." className="w-full pl-2 pr-4 py-2.5 text-sm focus:outline-none bg-transparent" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
             </div>
+
+            <a 
+              href="https://docs.google.com/spreadsheets/d/1kP4XSKwctsU2CPZS_enfj8QRPYTkv3HGuC54ch68mYs/edit?gid=623973450#gid=623973450" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 text-emerald-700 px-4 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 shadow-sm transition-all"
+              title="Acessar a Planilha Google"
+            >
+              <FileSpreadsheet size={16} /> Planilha
+            </a>
+
             <button onClick={() => fetchOrders()} className="bg-white border border-slate-200 hover:border-blue-500 hover:text-blue-600 text-slate-600 p-2.5 rounded-xl shadow-sm transition-all group">
               <RefreshCw size={18} className={`group-hover:rotate-180 transition-transform duration-500 ${isLoading ? "animate-spin text-blue-500" : ""}`} />
             </button>
@@ -552,7 +592,7 @@ export default function App() {
                         {order.codigoProduto ? `${order.codigoProduto} - ${order.produto}` : order.produto}
                       </div>
                       <div className="text-slate-500 text-xs mt-1 max-w-md whitespace-normal break-words leading-relaxed" title={order.descricao}>
-                        <span className="font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">{order.quantidade} un</span> 
+                        <span className="font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">{order.quantidade}</span> 
                         <span className="mx-1 text-slate-300">|</span> 
                         <span className="font-semibold text-slate-400">Justificativa:</span> {order.descricao}
                       </div>
