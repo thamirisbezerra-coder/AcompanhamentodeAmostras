@@ -198,6 +198,12 @@
         if (!emailModalData) return null;
         const order = emailModalData;
         
+        // NOVIDADE: Agrupa todos os produtos do mesmo pedido para mandar num e-mail só!
+        const orderProducts = orders.filter(o => o.pedido === order.pedido);
+        const productsListHtml = orderProducts.map(p => 
+          `<li><strong>${p.codigoProduto ? p.codigoProduto + ' - ' : ''}${p.produto}</strong> (Qtde: ${p.quantidade})</li>`
+        ).join('');
+
         let to = '';
         let ccList = [];
         let subject = '';
@@ -212,12 +218,15 @@
             <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6;">
               <p>Prezado(a) <strong>${order.vendedor}</strong>,</p>
               <p>Esperamos que este e-mail o(a) encontre bem.</p>
-              <p>Entramos em contato referente à antecipação da amostra solicitada sob o <strong>Pedido ${order.pedido}</strong> para o cliente <strong>${order.razaoSocial}</strong>.</p>
-              <p>Conforme nossos registros, a amostra do produto <strong>${order.codigoProduto ? order.codigoProduto + ' - ' : ''}${order.produto}</strong> (Qtde: ${order.quantidade}) tinha um teste agendado para a data de <strong>${formatarData(order.dataTeste)}</strong>.</p>
+              <p>Entramos em contato referente à antecipação da(s) amostra(s) solicitada(s) sob o <strong>Pedido ${order.pedido}</strong> para o cliente <strong>${order.razaoSocial}</strong>.</p>
+              <p>Conforme nossos registros, o(s) item(ns) abaixo tinha(m) um teste agendado para a data de <strong>${formatarData(order.dataTeste)}</strong>:</p>
+              <ul style="color: #444; padding-left: 20px;">
+                ${productsListHtml}
+              </ul>
               <p>Para garantir a eficácia das nossas soluções, solicitamos um feedback detalhado sobre este teste:</p>
-              <ul style="color: #444;">
+              <ul style="color: #444; padding-left: 20px;">
                 <li>O teste foi realizado conforme o previsto?</li>
-                <li>Como foi a performance do produto durante a aplicação?</li>
+                <li>Como foi a performance durante a aplicação?</li>
                 <li>Houve aprovação técnica por parte do cliente?</li>
                 <li>Quais são os próximos passos ou previsão para negócios decorrentes desta amostra?</li>
               </ul>
@@ -232,17 +241,20 @@
         } else {
           to = customerEmailInput;
           ccList = [order.emailVendedor, order.emailGerente, ...EMAILS_COPIA_FIXA].filter(Boolean);
-          subject = `Acompanhamento de Amostra Doremus - ${order.produto}`;
+          subject = `Acompanhamento de Amostras - Pedido ${order.pedido} - ${order.razaoSocial}`;
           
           htmlBody = `
             <div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6;">
               <p>Prezados parceiros da <strong>${order.razaoSocial}</strong>,</p>
               <p>Gostaríamos de agradecer a confiança e a oportunidade de apresentar as soluções da Doremus.</p>
-              <p>Entramos em contato para acompanhar o recebimento e o teste da amostra referente ao produto <strong>${order.codigoProduto ? order.codigoProduto + ' - ' : ''}${order.produto}</strong>, enviada recentemente.</p>
+              <p>Entramos em contato para acompanhar o recebimento e o teste da(s) amostra(s) abaixo, enviada(s) recentemente sob o pedido <strong>${order.pedido}</strong>:</p>
+              <ul style="color: #444; padding-left: 20px;">
+                ${productsListHtml}
+              </ul>
               <p>Nosso objetivo é garantir a excelência no atendimento. Por isso, gostaríamos de saber:</p>
-              <ul style="color: #444;">
+              <ul style="color: #444; padding-left: 20px;">
                 <li>Os testes com a nossa solução já foram realizados?</li>
-                <li>Como vocês avaliam a performance e os resultados da nossa amostra em sua aplicação?</li>
+                <li>Como vocês avaliam a performance e os resultados em sua aplicação?</li>
                 <li>Há algum ajuste necessário ou podemos seguir com os próximos passos comerciais?</li>
               </ul>
               <p>Nossa equipe, juntamente com o executivo de contas <strong>${order.vendedor}</strong>, está à total disposição para fornecer suporte técnico adicional caso seja necessário.</p>
@@ -275,7 +287,7 @@
         const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(details.to)}&cc=${encodeURIComponent(details.ccList.join(','))}&su=${encodeURIComponent(details.subject)}&body=${encodeURIComponent(textBody)}`;
         window.open(gmailUrl, '_blank');
         
-        if(confirm('O Gmail foi aberto. Deseja marcar este pedido como Cobrado (Roxo)?')) {
+        if(confirm('O Gmail foi aberto. Deseja marcar TODOS os itens deste pedido como Cobrado (Roxo)?')) {
           markAsCobrado(emailModalData.id, customerEmailInput);
         }
       };
@@ -289,7 +301,7 @@
           return;
         }
 
-        if(!confirm('O e-mail será disparado agora mesmo e você receberá uma cópia. O pedido ficará Roxo. Deseja confirmar?')) return;
+        if(!confirm('O e-mail será disparado agora mesmo e você receberá uma cópia. TODOS os itens deste pedido ficarão Roxos. Deseja confirmar?')) return;
 
         setIsLoading(true);
         try {
